@@ -347,28 +347,135 @@ def batch_cmd(ctx, url, model, llm_api, max_tokens, temperature,
 
     # Print summary
     passed = sum(1 for r in results if r.status == "success")
+    failed = sum(1 for r in results if r.status == "error")
+    total_time = sum(r.time_taken for r in results)
 
-
-# ---------------------------------------------------------------------------
-# Info subcommand
-# ---------------------------------------------------------------------------
-
-@click.command(name="info")
-def info_cmd():
-    """Show version and configuration information."""
-    from llm_browser_driver import __version__
-
-    click.echo(f"LLM Browser Driver v{__version__}")
     click.echo("")
-    click.echo("Configuration:")
-    config = load_config()
-    click.echo(f"  LLM model: {config.llm.model}")
-    click.echo(f"  LLM API: {config.llm.api_url}")
-    click.echo(f"  Max tokens: {config.llm.max_tokens}")
-    click.echo(f"  Temperature: {config.llm.temperature}")
-    click.echo(f"  Max iterations: {config.agent.max_iterations}")
-    click.echo(f"  Headless: {config.browser.headless}")
-    click.echo(f"  Timeout: {config.browser.timeout}ms")
+    click.echo("=" * 60)
+    click.echo(" Batch Test Summary")
+    click.echo("=" * 60)
+    click.echo(f" Total: {len(results)}")
+    click.echo(f" Passed: {passed}")
+    click.echo(f" Failed: {failed}")
+    click.echo(f" Time: {total_time:.1f}s")
+    click.echo("=" * 60)
+
+    # Per-test detail
+    for i, r in enumerate(results, 1):
+        status_icon = "✓" if r.status == "success" else "✗"
+        click.echo(f"  {i}. [{status_icon}] {r.test_name}")
+        if r.findings:
+            for f in r.findings:
+                severity = f.get("severity", "info").upper()
+                desc = f.get("description", "")[:80]
+                click.echo(f"      [{severity}] {desc}")
+
+    # Generate reports
+    if output:
+        report_dir = Path(output)
+        paths = generate_all_reports(results, report_dir, formats=report_formats.split(","))
+        click.echo("")
+        click.echo(" Reports generated:")
+        for fmt, path in paths.items():
+            click.echo(f"  [{fmt}] {path}")
+
+    if failed > 0:
+        sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
+# Serve subcommand
+# ---------------------------------------------------------------------------
+
+@click.command(name="serve")
+@click.option(
+    "--directory",
+    "-d",
+    default="results",
+    help="Directory containing report runs (default: results/).",
+)
+@click.option(
+    "--port",
+    "-p",
+    type=int,
+    default=8080,
+    help="Port to serve on (default: 8080).",
+)
+@click.option(
+    "--host",
+    "-h",
+    default="127.0.0.1",
+    help="Host to bind to (default: 127.0.0.1).",
+)
+@click.option(
+    "--open/--no-open",
+    default=True,
+    help="Open the report dashboard in the default browser (default: open).",
+)
+def serve_cmd(directory, port, host, open_browser):
+    """Start a local HTTP server to view test reports and dashboard.
+
+    Serves the results directory as a static site with the central
+    dashboard (index.html) at the root. Each run-{timestamp}/ folder
+    contains its own report.html with screenshot thumbnails.
+
+    Example::
+
+        llm-browser-driver serve --directory results/ --port 8080
+
+    """
+    import http.server
+    import threading
+    import webbrowser
+    from urllib.parse import urlparse
+
+    results_dir = Path(directory).resolve()
+    if not results_dir.is_dir():
+        click.echo(f"Error: Results directory not found: {results_dir}", err=True)
+        sys.exit(1)
+
+    index_file = results_dir / "index.html"
+    if not index_file.is_file():
+        click.echo(
+            f"Warning: No index.html found at {results_dir}. "
+            f"Run an exploration first with --output {results_dir}.",
+            err=True,
+        )
+
+    # Start server in a thread
+    class QuietHandler(http.server.SimpleHTTPRequestHandler):
+        """HTTP handler that suppresses request logging for a quiet serve."""
+
+        def log_message(self, format, *args):
+            pass  # Silence request logs
+
+        def end_headers(self):
+            # Add CORS headers so the dashboard can fetch run data
+            self.send_header("Access-Control-Allow-Origin", "*")
+            super().end_headers()
+
+    server = http.server.HTTPServer(
+        (host, port),
+        lambda *args, **kwargs: QuietHandler(*args, directory=str(results_dir), **kwargs),
+    )
+
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    # Open in browser
+    url = f"http://{host}:{port}/"
+    if open_browser:
+        webbrowser.open(url)
+
+    click.echo(f"Report server started: {url}")
+    click.echo(f"  Directory: {results_dir}")
+    click.echo(f"  Press Ctrl+C to stop")
+
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        click.echo("\nServer stopped.")
+        server.shutdown()
 
 
 # ---------------------------------------------------------------------------
@@ -390,8 +497,7 @@ def main(ctx):
 
 main.add_command(explore_cmd)
 main.add_command(batch_cmd)
-main.add_command(info_cmd)
-
+main.add_command(serve_cmd)
 
 if __name__ == "__main__":
     main()
