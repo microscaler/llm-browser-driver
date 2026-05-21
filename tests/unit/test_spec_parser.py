@@ -48,7 +48,11 @@ MINIMAL_SPEC = {
                         "content": {"application/json": {"schema": {"type": "object"}}},
                     }
                 },
-            }
+            },
+            "get": {
+                "summary": "List jobs",
+                "responses": {"200": {"description": "OK"}},
+            },
         },
         "/api/v1/auth/signin": {
             "post": {
@@ -67,12 +71,6 @@ MINIMAL_SPEC = {
                         }
                     }
                 },
-                "responses": {"200": {"description": "OK"}},
-            }
-        },
-        "/api/v1/jobs": {
-            "get": {
-                "summary": "List jobs",
                 "responses": {"200": {"description": "OK"}},
             }
         },
@@ -458,7 +456,7 @@ class TestGenerateGoals:
 class TestEndpointSpecRepr:
     def test_repr_with_body(self, minimal_parser):
         endpoints = minimal_parser.get_body_endpoints()
-        ep = endpoints[0]
+        ep = next(ep for ep in endpoints if ep.path == "/api/v1/jobs")
         assert "POST" in repr(ep)
         assert "/api/v1/jobs" in repr(ep)
         assert "body(2)" in repr(ep) or "body(1)" in repr(ep)

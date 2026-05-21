@@ -180,7 +180,7 @@ class SpecParser:
         """
         return [
             ep for ep in self.get_endpoints()
-            if ep.method.upper() in self.BODY_METHODS and ep.request_body
+            if ep.method in self.BODY_METHODS and ep.request_body
         ]
 
     def generate_goals(
@@ -340,16 +340,27 @@ class SpecParser:
         items = schema.get("items", {})
         properties = schema.get("properties", {})
 
-        # Handle array types
+        # Handle nested object types
         if prop_type == "array":
             items_schema = items.get("type", "object")
             if items_schema == "object":
-                nested = {}
+                nested: dict[str, FieldSchema] = {}
                 for sub_name, sub_prop in items.get("properties", {}).items():
                     nested[sub_name] = SpecParser._parse_property(
                         sub_name, sub_prop, []
                     )
                 prop_type = "object"
+            else:
+                nested = {}
+        elif prop_type == "object" and properties:
+            # Direct object type with properties — parse them
+            nested: dict[str, FieldSchema] = {}
+            for sub_name, sub_prop in properties.items():
+                nested[sub_name] = SpecParser._parse_property(
+                    sub_name, sub_prop, []
+                )
+        else:
+            nested = {}
 
         return FieldSchema(
             name=name,
@@ -468,7 +479,7 @@ class SpecParser:
         """Return count of endpoints by HTTP method."""
         counts: dict[str, int] = {}
         for ep in self.get_endpoints():
-            counts[ep.method.upper()] = counts.get(ep.method.upper(), 0) + 1
+            counts[ep.method] = counts.get(ep.method, 0) + 1
         return counts
 
 
