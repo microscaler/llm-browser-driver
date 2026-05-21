@@ -134,8 +134,8 @@ class TestLoadFromEnv:
 
     def test_multiple_env_vars(self):
         os.environ["LLM_BROWSER_DRIVER__LLM_MODEL"] = "gpt-4"
-        os.environ["LLM_BROWSER_DRIVER__MAX_ITERATIONS"] = "50"
-        os.environ["LLM_BROWSER_DRIVER__HEADLESS"] = "false"
+        os.environ["LLM_BROWSER_DRIVER__AGENT_MAX_ITERATIONS"] = "50"
+        os.environ["LLM_BROWSER_DRIVER__BROWSER_HEADLESS"] = "false"
         result = _load_from_env()
         assert result["llm"]["model"] == "gpt-4"
         assert result["agent"]["max_iterations"] == "50"  # stays string

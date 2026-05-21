@@ -101,7 +101,8 @@ def parse_action_from_response(response_text: str) -> dict[str, Any]:
     Qwen3 outputs reasoning text (thinking) followed by the actual JSON answer.
     The JSON answer is always at the END of the response.
 
-    Strategy: scan from the end to find the last { that opens a valid JSON object.
+    Strategy: strip markdown code blocks, then scan from the end to find
+    the last { that opens a valid JSON object.
 
     Args:
         response_text: Raw LLM response text.
@@ -110,11 +111,14 @@ def parse_action_from_response(response_text: str) -> dict[str, Any]:
         Dict with at least an "action" key. If no valid JSON found,
         returns {"action": "done", "summary": response_text[:200]}.
     """
+    # Strip fenced code blocks (```...```) that may contain non-JSON content
+    text = re.sub(r"```[\s\S]*?```", "", response_text)
+
     # Strategy 1: Find the last JSON object starting from the end
     # Work backwards through the text, when we find a '{', try to parse forward
-    for i in range(len(response_text) - 1, -1, -1):
-        if response_text[i] == "{":
-            candidate = response_text[i:]
+    for i in range(len(text) - 1, -1, -1):
+        if text[i] == "{":
+            candidate = text[i:]
             try:
                 parsed = json.loads(candidate)
                 if isinstance(parsed, dict) and "action" in parsed:

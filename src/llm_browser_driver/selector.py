@@ -117,8 +117,9 @@ def click_by_link(page: Page, element_text: str) -> tuple[bool, str]:
 def find_field(page: Page, field_text: str) -> tuple[bool, str]:
     """Try to find an input or textarea field by multiple criteria.
 
-    Checks: name → placeholder → id → aria-label → label[for] text.
-    First match wins. This is the fill field matching strategy.
+    Checks: name → placeholder → id → aria-label → label[for] text →
+    label[data-for] text. First match wins. This is the fill field matching
+    strategy.
 
     Args:
         page: Playwright Page object.
@@ -128,6 +129,25 @@ def find_field(page: Page, field_text: str) -> tuple[bool, str]:
         (success, display_name_or_empty) tuple. The display name is the first
         matching identifier found (label > aria-label > id > name > placeholder).
     """
+    # Try label[data-for] text match first (covers cases where the label
+    # text itself is the search term and no name/placeholder/id exists on input)
+    try:
+        labels = page.locator("label[data-for]")
+        for lbl in labels.all()[:50]:
+            try:
+                lbl_text = lbl.inner_text(timeout=500).strip().lower()
+                if field_text.lower() in lbl_text or lbl_text in field_text.lower():
+                    # Find the associated input via data-for attribute
+                    for_val = lbl.get_attribute("data-for") or ""
+                    if for_val:
+                        inp = page.locator(f"#{for_val}")
+                        if inp.count() > 0:
+                            return True, lbl.inner_text(timeout=500).strip()
+            except Exception:
+                continue
+    except Exception:
+        pass
+
     # Try inputs first
     inputs = page.locator(
         "input:not([type=hidden]):not([type=submit]):not([type=button])"
@@ -147,6 +167,11 @@ def find_field(page: Page, field_text: str) -> tuple[bool, str]:
                 label_el = page.locator(f"label[for='{inp_id_attr}']")
                 if label_el.count() > 0:
                     inp_label = label_el.first.inner_text(timeout=500).strip()
+                # Also try label[data-for='{inp_id_attr}'] (React-style)
+                else:
+                    label_el = page.locator(f"label[data-for='{inp_id_attr}']")
+                    if label_el.count() > 0:
+                        inp_label = label_el.first.inner_text(timeout=500).strip()
 
             field_lower = field_text.lower()
             if (
@@ -232,12 +257,15 @@ def find_select_field(page: Page, field_text: str) -> tuple[bool, str]:
 def click_select_option(
     page: Page, select_name: str, option_text: str
 ) -> tuple[bool, str]:
-    """Find a select by name and click the matching option.
+    """Find a select by name and select the matching option.
+
+    Uses Playwright's select_option() API rather than clicking
+    <option> elements (which aren't clickable in browsers).
 
     Args:
         page: Playwright Page object.
         select_name: The select element name attribute.
-        option_text: The option text to click.
+        option_text: The option text to select.
 
     Returns:
         (success, result_message) tuple.
@@ -247,19 +275,23 @@ def click_select_option(
         try:
             sel_name = sel.get_attribute("name") or ""
             if select_name.lower() == sel_name.lower():
-                options = sel.locator("option")
-                for opt in options.all()[:50]:
-                    try:
-                        opt_text = opt.inner_text(timeout=500).strip()
-                        if option_text.lower() in opt_text.lower():
-                            opt.click(timeout=5000)
-                            return (
-                                True,
-                                f"Selected option '{opt_text}' in select '{sel_name}'",
-                            )
-                    except Exception:
-                        continue
-                return True, f"Option '{option_text}' not found in select '{sel_name}'"
+                # Find the matching option by text
+                matching_option = None
+                for opt in sel.locator("option").all()[:50]:
+                    opt_text = opt.inner_text(timeout=500).strip()
+                    if option_text.lower() in opt_text.lower():
+                        matching_option = opt
+                        break
+
+                if matching_option is not None:
+                    opt_text = matching_option.inner_text(timeout=500).strip()
+                    # Use select_option() on the SELECT locator, passing the option label
+                    sel.select_option(label=opt_text, timeout=5000)
+                    return (
+                        True,
+                        f"Selected option '{opt_text}' in select '{sel_name}'",
+                    )
+                return False, f"Option '{option_text}' not found in select '{sel_name}'"
         except Exception:
             continue
     return False, f"Could not find select field matching: {select_name}"

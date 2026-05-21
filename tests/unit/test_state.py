@@ -286,7 +286,7 @@ class TestBuildPageSummary:
 
 class TestGetPageState:
     def test_returns_complete_state(self, browser_page: Page):
-        browser_page.goto("data:text/html,<h1>Test</h1><button>Click</button>")
+        browser_page.goto("data:text/html,<html><head><title>Test</title></head><body><h1>Test</h1><button>Click</button></body></html>")
         state = get_page_state(browser_page)
 
         assert state["title"] == "Test"

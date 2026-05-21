@@ -73,7 +73,7 @@ def extract_inputs(page: Page) -> list[dict[str, Any]]:
                 "aria_label": el.get_attribute("aria-label") or "",
                 "id": el.get_attribute("id") or "",
                 "disabled": el.is_disabled(),
-                "readonly": el.is_readonly(),
+                "readonly": el.get_attribute("readonly") is not None,
                 "value": el.get_attribute("value") or "",
             }
             inputs.append(info)
