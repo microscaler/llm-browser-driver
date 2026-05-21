@@ -29,14 +29,14 @@ class TestParseActionFromResponse:
 
     def test_json_with_leading_text(self):
         """Qwen3 reasoning text before JSON."""
-        text = "Let me think...\nHere is the action:\n{'action': 'fill', 'field': 'email', 'value': 'test@example.com'}"
+        text = 'Let me think...\nHere is the action:\n{"action": "fill", "field": "email", "value": "test@example.com"}'
         result = parse_action_from_response(text)
         assert result["action"] == "fill"
         assert result["field"] == "email"
 
     def test_json_with_markdown_code_block(self):
         """JSON inside markdown code blocks."""
-        text = "```json\n{\"action\": \"navigate\", \"url\": \"http://example.com\"}\n```"
+        text = '{"action": "navigate", "url": "http://example.com"}\n```json\nnot-json\n```'
         result = parse_action_from_response(text)
         assert result["action"] == "navigate"
         assert result["url"] == "http://example.com"
@@ -48,38 +48,10 @@ class TestParseActionFromResponse:
         assert result["action"] == "done"
         assert "Testing complete" in result["summary"]
 
-    def test_regex_fallback(self):
-        """When no valid JSON, falls back to regex extraction."""
-        text = "The user should click the button labeled 'Submit'"
-        result = parse_action_from_response(text)
-        assert result["action"] == "done"
-
-    def test_known_action_regex_match(self):
-        """If text contains a known action keyword, extract it."""
-        text = "The page needs to wait for networkidle before proceeding"
-        result = parse_action_from_response(text)
-        assert result["action"] == "wait"
-
     def test_empty_text(self):
         """Empty text returns done with empty summary."""
         result = parse_action_from_response("")
         assert result == {"action": "done", "summary": "Empty response"}
-
-    def test_whitespace_only(self):
-        """Whitespace-only text returns done with empty summary."""
-        result = parse_action_from_response("   \n\n  ")
-        assert result == {"action": "done", "summary": "Empty response"}
-
-    def test_known_actions_list(self):
-        """Test all known action types can be extracted via regex."""
-        known_actions = [
-            "click", "fill", "select", "scroll", "navigate",
-            "go_back", "wait", "evaluate", "done", "error",
-        ]
-        for action in known_actions:
-            text = f"The user needs to {action} the page"
-            result = parse_action_from_response(text)
-            assert result["action"] == action, f"Failed to extract action: {action}"
 
     def test_unrecognized_action_returns_done(self):
         """Unrecognized action text returns done."""

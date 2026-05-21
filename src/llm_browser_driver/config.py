@@ -85,11 +85,15 @@ class AppConfig:
 def _load_from_env() -> dict[str, Any]:
     """Load configuration from environment variables.
 
-    Supports flattened structure:
-        config.llm.api_url        → LLM_BROWSER_DRIVER__LLM_API_URL
-        config.llm.model          → LLM_BROWSER_DRIVER__LLM_MODEL
-        config.agent.max_iterations → LLM_BROWSER_DRIVER__MAX_ITERATIONS
-        config.browser.headless   → LLM_BROWSER_DRIVER__HEADLESS
+    Convention: LLM_BROWSER_DRIVER__<SECTION>_<KEY> → nested config.
+    Section is the first word after the prefix; key is the rest.
+
+        LLM_BROWSER_DRIVER__LLM_API_URL       → llm.api_url
+        LLM_BROWSER_DRIVER__LLM_MODEL         → llm.model
+        LLM_BROWSER_DRIVER__AGENT_MAX_ITERATIONS → agent.max_iterations
+        LLM_BROWSER_DRIVER__BROWSER_HEADLESS  → browser.headless
+        LLM_BROWSER_DRIVER__URL               → top-level url
+
     """
     prefix = "LLM_BROWSER_DRIVER__"
     result: dict[str, Any] = {}
@@ -97,17 +101,19 @@ def _load_from_env() -> dict[str, Any]:
     for key, value in os.environ.items():
         if not key.startswith(prefix):
             continue
-        # Strip prefix and flatten double-underscore path
-        path = key[len(prefix):]  # e.g. "LLM_API_URL", "MAX_ITERATIONS"
-        parts = path.lower().split("__")
+        # Strip prefix and determine section vs key
+        remainder = key[len(prefix):].lower()
+        parts = remainder.split("_", 1)  # split on FIRST underscore only
 
-        # Build nested dict
-        target = result
-        for part in parts[:-1]:
-            if part not in target:
-                target[part] = {}
-            target = target[part]
-        target[parts[-1]] = value
+        if len(parts) == 1:
+            # Top-level key, e.g. "URL"
+            result[parts[0]] = value
+        else:
+            # Section + key, e.g. "llm_api_url" → section="llm", key="api_url"
+            section, key = parts
+            if section not in result:
+                result[section] = {}
+            result[section][key] = value
 
     return result
 

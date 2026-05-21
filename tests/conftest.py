@@ -309,7 +309,6 @@ def browser_page(browser_instance):
     """Provide a fresh page for integration tests."""
     context = browser_instance.new_context(
         viewport={"width": 800, "height": 600},
-        viewport_size={"width": 800, "height": 600},
     )
     page = context.new_page()
     yield page

@@ -509,6 +509,31 @@ def build_page_summary(snapshot: dict[str, Any]) -> str:
     return "\n".join(sections)
 
 
+def build_action_history_summary(action_history: list[dict[str, Any]]) -> str:
+    """Build a text summary of actions taken so far for the LLM prompt.
+
+    Only includes the last 10 actions to keep prompts concise.
+
+    Args:
+        action_history: List of action records from the exploration loop.
+
+    Returns:
+        Text summary with numbered actions.
+    """
+    if not action_history:
+        return "No actions taken yet."
+
+    lines = []
+    lines.append("ACTION HISTORY:")
+    for i, action in enumerate(action_history[-10:], 1):
+        lines.append(f"  {i}. {action['action']} → {action['result'][:100]}")
+
+    if len(action_history) > 10:
+        lines.append(f"  ... ({len(action_history) - 10} more actions omitted)")
+
+    return "\n".join(lines)
+
+
 def get_page_state(page: Page) -> dict[str, Any]:
     """Capture comprehensive page state.
 
