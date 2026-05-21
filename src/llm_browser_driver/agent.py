@@ -114,6 +114,9 @@ class TestResult:
     error: str = ""
     findings: list[dict[str, Any]] = field(default_factory=list)
     time_taken: float = 0.0
+    # Screenshot metadata (populated when screenshot capture is enabled)
+    _screenshot_dir: str | None = None
+    _screenshots_taken: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to dict for JSON output."""
@@ -130,6 +133,10 @@ class TestResult:
             "findings": self.findings,
             "time_taken": self.time_taken,
         }
+
+    def __repr__(self) -> str:
+        return f"TestResult(test_name={self.test_name!r}, status={self.status!r})"
+
 
 
 # ---------------------------------------------------------------------------

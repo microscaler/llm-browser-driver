@@ -409,6 +409,7 @@ def batch_cmd(ctx, url, model, llm_api, max_tokens, temperature,
 )
 @click.option(
     "--open/--no-open",
+    "open_browser",
     default=True,
     help="Open the report dashboard in the default browser (default: open).",
 )
