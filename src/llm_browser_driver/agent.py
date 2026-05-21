@@ -179,6 +179,41 @@ class BrowserDriver:
         self._playwright_instance: Any = None
 
     # ------------------------------------------------------------------
+    # Screenshot capture
+    # ------------------------------------------------------------------
+
+    def _take_screenshot(
+        self,
+        page: Any,
+        step: int,
+        screenshot_dir: Path,
+        tag: str = "",
+    ) -> str | None:
+        """Capture a screenshot and save it to the screenshot directory.
+
+        Args:
+            page: Playwright Page object.
+            step: Current step number for naming.
+            screenshot_dir: Directory to save screenshots.
+            tag: Optional tag suffix (e.g., 'failure').
+
+        Returns:
+            Relative file path (e.g., 'screenshots/step-1.png') or None.
+        """
+        try:
+            screenshot_dir.mkdir(parents=True, exist_ok=True)
+            if tag:
+                name = f"step-{step}-{tag}.png"
+            else:
+                name = f"step-{step}.png"
+            path = screenshot_dir / name
+            page.screenshot(path=str(path), full_page=True, timeout=5000)
+            return f"screenshots/{name}"
+        except Exception:
+            return None
+
+
+    # ------------------------------------------------------------------
     # Context management
     # ------------------------------------------------------------------
 
@@ -213,6 +248,9 @@ class BrowserDriver:
         goal: str = "",
         max_iterations: int | None = None,
         auth_file: str | Path | None = None,
+        screenshot_dir: str | Path | None = None,
+        screenshot_interval: int | None = None,
+        screenshot_on_failure: bool = True,
     ) -> TestResult:
         """Run an interactive exploration test.
 
@@ -227,9 +265,17 @@ class BrowserDriver:
                 Defaults to config.agent.max_iterations.
             auth_file: Path to Playwright storage-shipper JSON for
                 authenticated sessions.
+            screenshot_dir: Directory to save screenshots. If provided,
+                screenshots are saved as step-{N}.png.
+            screenshot_interval: Take a screenshot every N iterations.
+                Only used when screenshot_dir is provided.
+            screenshot_on_failure: Take a screenshot when an error occurs.
+                Only used when screenshot_dir is provided.
 
         Returns:
             TestResult with action history, console errors, and findings.
+            If screenshots were captured, each action record includes
+            a "screenshot" key with the relative path to the PNG.
 
         Example:
             >>> result = driver.explore(
@@ -274,14 +320,31 @@ class BrowserDriver:
         page = context.new_page()
         start_time = time.time()
 
+        # Setup screenshot capture
+        screenshot_dir_path: Path | None = None
+        if screenshot_dir:
+            screenshot_dir_path = Path(screenshot_dir)
+            # Use run-{timestamp} subfolder if screenshot_dir is a base directory
+            if screenshot_dir_path.is_dir() and not screenshot_dir_path.name.startswith("run-"):
+                from datetime import datetime
+                ts = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
+                screenshot_dir_path = screenshot_dir_path / f"run-{ts}"
+            screenshot_dir_path.mkdir(parents=True, exist_ok=True)
+
         try:
             # Navigate to the page
             page.goto(url, wait_until="domcontentloaded", timeout=15000)
             page.wait_for_load_state("networkidle", timeout=10000)
 
+            # Initial page screenshot
+            screenshot_path = None
+            if screenshot_dir_path is not None:
+                screenshot_path = self._take_screenshot(page, 0, screenshot_dir_path)
+
             initial_url = page.url
             action_history: list[dict[str, Any]] = []
             findings: list[dict[str, Any]] = []
+            screenshots_taken = 0
 
             # Main exploration loop
             iteration = 0
@@ -312,6 +375,17 @@ Based on the goal, action history, and current page state, decide the next actio
                 # Execute action
                 result_msg, is_done = execute_action(page, action)
 
+                # Take screenshot at intervals
+                current_screenshot: str | None = None
+                if screenshot_dir_path is not None:
+                    screenshot_interval_int = screenshot_interval or 0
+                    if screenshot_interval_int > 0 and iteration % screenshot_interval_int == 0:
+                        current_screenshot = self._take_screenshot(
+                            page, iteration, screenshot_dir_path
+                        )
+                        if current_screenshot:
+                            screenshots_taken += 1
+
                 # Record result
                 action_record = {
                     "step": iteration,
@@ -320,6 +394,8 @@ Based on the goal, action history, and current page state, decide the next actio
                     "result": result_msg[:500],
                     "url": page.url,
                 }
+                if current_screenshot:
+                    action_record["screenshot"] = current_screenshot
                 action_history.append(action_record)
 
                 # Check if done
@@ -357,10 +433,21 @@ Based on the goal, action history, and current page state, decide the next actio
                 console_errors=snapshot.get("console", []),
                 findings=findings,
                 time_taken=elapsed,
+                _screenshot_dir=str(screenshot_dir_path) if screenshot_dir_path else None,
+                _screenshots_taken=screenshots_taken,
             )
 
         except Exception as e:
             elapsed = time.time() - start_time
+
+            # Capture error screenshot
+            screenshot_path = None
+            if screenshot_dir_path is not None and screenshot_on_failure:
+                screenshot_path = self._take_screenshot(
+                    page, 0, screenshot_dir_path, tag="failure"
+                )
+                screenshots_taken += 1 if screenshot_path else 0
+
             return TestResult(
                 test_name=goal,
                 url=url,
@@ -371,6 +458,8 @@ Based on the goal, action history, and current page state, decide the next actio
                 action_history=action_history,
                 error=str(e),
                 time_taken=elapsed,
+                _screenshot_dir=str(screenshot_dir_path) if screenshot_dir_path else None,
+                _screenshots_taken=screenshots_taken,
             )
 
         finally:
