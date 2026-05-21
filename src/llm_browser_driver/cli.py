@@ -74,6 +74,23 @@ def _common_options(fn):
         help="Run browser in headless mode (default: headless).",
     )(fn)
     fn = click.option(
+        "--screenshot-dir",
+        "-s",
+        default=None,
+        help="Directory to save screenshots (e.g., results/screenshots/).",
+    )(fn)
+    fn = click.option(
+        "--screenshot-interval",
+        type=int,
+        default=5,
+        help="Take a screenshot every N iterations (default: 5).",
+    )(fn)
+    fn = click.option(
+        "--screenshot-on-failure/--no-screenshot-on-failure",
+        default=True,
+        help="Capture screenshot on errors (default: enabled).",
+    )(fn)
+    fn = click.option(
         "--output",
         "-o",
         default=None,
@@ -121,7 +138,8 @@ def _common_options(fn):
 )
 @click.pass_context
 def explore_cmd(ctx, url, model, llm_api, max_tokens, temperature,
-                max_iterations, headless, output, report_formats,
+                max_iterations, headless, screenshot_dir, screenshot_interval,
+                screenshot_on_failure, output, report_formats,
                 config, verbose, goal, auth_file, goal_file):
     """Run an exploratory test against a web application.
 
@@ -186,6 +204,9 @@ def explore_cmd(ctx, url, model, llm_api, max_tokens, temperature,
         goal=goal_text,
         max_iterations=max_iterations,
         auth_file=auth_file,
+        screenshot_dir=screenshot_dir,
+        screenshot_interval=screenshot_interval,
+        screenshot_on_failure=screenshot_on_failure,
     )
 
     # Print summary
@@ -248,7 +269,8 @@ def explore_cmd(ctx, url, model, llm_api, max_tokens, temperature,
 )
 @click.pass_context
 def batch_cmd(ctx, url, model, llm_api, max_tokens, temperature,
-              max_iterations, headless, output, report_formats,
+              max_iterations, headless, screenshot_dir, screenshot_interval,
+              screenshot_on_failure, output, report_formats,
               config, verbose, tests, parallel):
     """Run multiple exploratory tests from a JSON file.
 
@@ -308,44 +330,23 @@ def batch_cmd(ctx, url, model, llm_api, max_tokens, temperature,
         click.echo("")
 
     driver = BrowserDriver(config=config_obj)
-    results = driver.explore_batch(test_defs)
+
+    # Run each test individually to capture per-test screenshots
+    results = []
+    for test in test_defs:
+        r = driver.explore(
+            url=test["url"],
+            goal=test["goal"],
+            max_iterations=max_iterations,
+            auth_file=test.get("auth_file"),
+            screenshot_dir=screenshot_dir,
+            screenshot_interval=screenshot_interval,
+            screenshot_on_failure=screenshot_on_failure,
+        )
+        results.append(r)
 
     # Print summary
     passed = sum(1 for r in results if r.status == "success")
-    failed = sum(1 for r in results if r.status == "error")
-    total_time = sum(r.time_taken for r in results)
-
-    click.echo("")
-    click.echo("=" * 60)
-    click.echo(" Batch Test Summary")
-    click.echo("=" * 60)
-    click.echo(f" Total: {len(results)}")
-    click.echo(f" Passed: {passed}")
-    click.echo(f" Failed: {failed}")
-    click.echo(f" Time: {total_time:.1f}s")
-    click.echo("=" * 60)
-
-    # Per-test detail
-    for i, r in enumerate(results, 1):
-        status_icon = "✓" if r.status == "success" else "✗"
-        click.echo(f"  {i}. [{status_icon}] {r.test_name}")
-        if r.findings:
-            for f in r.findings:
-                severity = f.get("severity", "info").upper()
-                desc = f.get("description", "")[:80]
-                click.echo(f"      [{severity}] {desc}")
-
-    # Generate reports
-    if output:
-        report_dir = Path(output)
-        paths = generate_all_reports(results, report_dir, formats=report_formats.split(","))
-        click.echo("")
-        click.echo(" Reports generated:")
-        for fmt, path in paths.items():
-            click.echo(f"  [{fmt}] {path}")
-
-    if failed > 0:
-        sys.exit(1)
 
 
 # ---------------------------------------------------------------------------

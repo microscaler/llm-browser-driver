@@ -197,6 +197,7 @@ def generate_html_report(
     include_action_history: bool = True,
     include_console_errors: bool = True,
     include_findings: bool = True,
+    screenshot_base: str | Path | None = None,
 ) -> Path:
     """Generate a rich Playwright-style HTML test report.
 
@@ -210,6 +211,10 @@ def generate_html_report(
         include_action_history: Whether to include the action history table.
         include_console_errors: Whether to include console error listings.
         include_findings: Whether to include findings section.
+        screenshot_base: Base path for screenshots. When the HTML report is
+            generated inside a run directory, pass the run directory path
+            here — screenshots are rendered as relative ``screenshots/step-N.png``
+            links. If None, the screenshot column is omitted.
 
     Returns:
         Absolute path to the generated HTML file.
@@ -261,20 +266,37 @@ def generate_html_report(
                 params = _html_escape(f"`{params_json}`" if params_json else "-")
                 result_text = _html_escape(str(entry.get("result", ""))[:120])
                 url = _html_escape(str(entry.get("url", "")))
+                screenshot_path = entry.get("screenshot", "")
+
+                screenshot_cell = ""
+                if screenshot_base and screenshot_path:
+                    screenshot_url = f"{Path(screenshot_base).name}/{screenshot_path}"
+                    screenshot_cell = (
+                        f'<td><a href="{screenshot_url}" target="_blank">'
+                        f'<img src="{screenshot_url}" class="screenshot-thumb" '
+                        f'alt="Step {entry.get("step", "?")}"></a></td>'
+                    )
+                else:
+                    screenshot_cell = "<td>-</td>"
+
                 rows.append(
                     f'<tr><td>{entry.get("step", "?")}</td>'
                     f'<td><code>{action}</code></td>'
                     f'<td>{params}</td>'
                     f'<td>{result_text}</td>'
-                    f'<td><code>{url}</code></td></tr>'
+                    f'<td><code>{url}</code></td>'
+                    f'{screenshot_cell}</tr>'
                 )
+            screenshot_col_header = ""
+            if screenshot_base:
+                screenshot_col_header = '<th>Screenshot</th>'
             section += f'''
                 <div class="action-history">
                     <h3>Action History</h3>
                     <table class="history-table">
-                        <thead><tr><th>Step</th><th>Action</th><th>Parameters</th><th>Result</th><th>URL</th></tr></thead>
+                        <thead><tr><th>Step</th><th>Action</th><th>Parameters</th><th>Result</th><th>URL</th>{screenshot_col_header}</tr></thead>
                         <tbody>
-{"".join(f"                            {row}\n" for row in rows)}
+{"                ".join(f"<tr>{row}</tr>" for row in rows)}
                         </tbody>
                     </table>
                 </div>'''
@@ -446,6 +468,24 @@ def generate_html_report(
             border-radius: 3px;
             font-size: 0.8rem;
         }}
+        .screenshot-thumb {{
+            max-width: 180px;
+            max-height: 120px;
+            border-radius: 4px;
+            border: 1px solid #30363d;
+            cursor: pointer;
+            transition: opacity 0.2s;
+        }}
+        .screenshot-thumb:hover {{
+            opacity: 0.85;
+        }}
+        .history-table td:last-child {{
+            text-align: center;
+            vertical-align: middle;
+        }}
+        .history-table th:last-child {{
+            text-align: center;
+        }}
         .console-error {{
             padding: 0.4rem 0.6rem;
             background: #1c2128;
@@ -612,7 +652,268 @@ def write_html_report(
 
 
 # ---------------------------------------------------------------------------
-# Batch report generation
+# ---------------------------------------------------------------------------
+# Run versioning and dashboard
+# ---------------------------------------------------------------------------
+
+def _create_run_directory(
+    output_dir: Path,
+    results: list[TestResult],
+) -> Path:
+    """Create a run-{timestamp} directory and return its path.
+
+    Args:
+        output_dir: The base results directory (e.g., "results/").
+        results: List of TestResults for this run.
+
+    Returns:
+        Path to the run directory (e.g., results/run-2026-05-21T10-00-00/).
+    """
+    from datetime import datetime
+    if len(results) == 1:
+        run_label = results[0].test_name.lower().replace(" ", "-")[:40]
+    else:
+        run_label = "batch"
+
+    ts = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
+    run_dir = output_dir / f"run-{ts}-{run_label}"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    return run_dir
+
+
+def _copy_screenshots(
+    run_dir: Path,
+    result: TestResult,
+) -> list[str]:
+    """Copy screenshots from the agent's screenshot_dir to the run directory.
+
+    Args:
+        run_dir: The run directory to copy screenshots into.
+        result: The TestResult containing screenshot metadata.
+
+    Returns:
+        List of relative paths to copied screenshots.
+    """
+    screenshots_copied: list[str] = []
+    screenshot_dir = getattr(result, "_screenshot_dir", None)
+    if not screenshot_dir or not Path(screenshot_dir).is_dir():
+        return screenshots_copied
+
+    dest_screenshots = run_dir / "screenshots"
+    dest_screenshots.mkdir(parents=True, exist_ok=True)
+
+    # Walk the screenshot directory and copy all PNGs
+    for png_file in sorted(Path(screenshot_dir).glob("*.png")):
+        dest = dest_screenshots / png_file.name
+        dest.write_bytes(png_file.read_bytes())
+        screenshots_copied.append(f"screenshots/{png_file.name}")
+
+    return screenshots_copied
+
+
+def _collect_runs(output_dir: Path) -> list[dict[str, Any]]:
+    """Scan the output directory for all run-{timestamp}-* folders.
+
+    Returns:
+        List of dicts with keys: name, dir, started_at, test_name,
+        passed, failed, total_steps, screenshots_count.
+    """
+    runs: list[dict[str, Any]] = []
+    if not output_dir.is_dir():
+        return runs
+
+    for run_dir in sorted(output_dir.glob("run-*"), reverse=True):
+        if not run_dir.is_dir():
+            continue
+        report_json = run_dir / "report.json"
+        if not report_json.is_file():
+            continue
+        try:
+            data = json.loads(report_json.read_text())
+        except (json.JSONDecodeError, ValueError):
+            continue
+
+        tests = data.get("tests", [data]) if "tests" not in data else data["tests"]
+        passed = sum(1 for t in tests if t.get("status") == "success")
+        failed = sum(1 for t in tests if t.get("status") == "error")
+        total_steps = sum(t.get("iterations", 0) for t in tests)
+
+        screenshots_count = 0
+        screenshots_dir = run_dir / "screenshots"
+        if screenshots_dir.is_dir():
+            screenshots_count = len(list(screenshots_dir.glob("*.png")))
+
+        # Extract human-readable name from first test
+        test_name = tests[0].get("test", "Unnamed") if tests else "Unnamed"
+
+        runs.append({
+            "name": run_dir.name,
+            "dir": run_dir.name,
+            "test_name": test_name,
+            "started_at": _timestamp(),
+            "passed": passed,
+            "failed": failed,
+            "total_steps": total_steps,
+            "screenshots_count": screenshots_count,
+        })
+
+    return runs
+
+
+def _generate_dashboard_html(
+    output_dir: Path,
+) -> Path:
+    """Generate the central index.html dashboard listing all runs.
+
+    The dashboard provides a table of all runs with pass/fail counts,
+    step counts, and screenshot availability. Each row is a link to
+    that run's report.html.
+
+    Args:
+        output_dir: The base results directory (e.g., "results/").
+
+    Returns:
+        Path to the generated index.html.
+    """
+    runs = _collect_runs(output_dir)
+    total_tests = len(runs)
+    total_passed = sum(r["passed"] for r in runs)
+    total_failed = sum(r["failed"] for r in runs)
+
+    run_rows = []
+    for r in runs:
+        status_color = "#2ea44f" if r["failed"] == 0 and r["passed"] > 0 else "#da3633" if r["failed"] > 0 else "#8b949e"
+        screenshot_badge = f'{r["screenshots_count"]} screenshots' if r["screenshots_count"] > 0 else "No screenshots"
+        run_rows.append(f'''
+        <tr>
+            <td><a href="{r['dir']}/report.html">{r['name']}</a></td>
+            <td>{r['test_name']}</td>
+            <td style="color: {status_color}; font-weight: 600;">
+                {r['passed']} passed / {r['failed']} failed
+            </td>
+            <td>{r['total_steps']}</td>
+            <td>{screenshot_badge}</td>
+        </tr>''')
+
+    dashboard_html = f'''<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LLM Browser Driver — Report Dashboard</title>
+    <style>
+        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+        body {{
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+            background: #0d1117;
+            color: #c9d1d9;
+            padding: 2rem;
+        }}
+        h1 {{
+            color: #58a6ff;
+            margin-bottom: 0.5rem;
+        }}
+        .subtitle {{
+            color: #8b949e;
+            margin-bottom: 2rem;
+        }}
+        .stats {{
+            display: flex;
+            gap: 2rem;
+            margin-bottom: 2rem;
+        }}
+        .stat-card {{
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 6px;
+            padding: 1rem 1.5rem;
+            text-align: center;
+        }}
+        .stat-card .value {{
+            font-size: 2rem;
+            font-weight: 600;
+        }}
+        .stat-card .label {{
+            font-size: 0.8rem;
+            color: #8b949e;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }}
+        table {{
+            width: 100%;
+            border-collapse: collapse;
+        }}
+        th, td {{
+            text-align: left;
+            padding: 0.75rem 1rem;
+            border-bottom: 1px solid #21262d;
+        }}
+        th {{
+            color: #8b949e;
+            font-weight: 500;
+            font-size: 0.85rem;
+            text-transform: uppercase;
+        }}
+        td a {{
+            color: #58a6ff;
+            text-decoration: none;
+        }}
+        td a:hover {{
+            text-decoration: underline;
+        }}
+        tr:hover {{
+            background: #161b22;
+        }}
+        @media (max-width: 768px) {{
+            body {{ padding: 1rem; }}
+            .stats {{ flex-wrap: wrap; gap: 1rem; }}
+            .stat-card {{ flex: 1; min-width: 120px; }}
+        }}
+    </style>
+</head>
+<body>
+    <h1>LLM Browser Driver — Report Dashboard</h1>
+    <p class="subtitle">Generated {_timestamp()}</p>
+
+    <div class="stats">
+        <div class="stat-card">
+            <div class="value">{total_tests}</div>
+            <div class="label">Total Runs</div>
+        </div>
+        <div class="stat-card">
+            <div class="value" style="color: #2ea44f;">{total_passed}</div>
+            <div class="label">Passed</div>
+        </div>
+        <div class="stat-card">
+            <div class="value" style="color: #f85149;">{total_failed}</div>
+            <div class="label">Failed</div>
+        </div>
+    </div>
+
+    <table>
+        <thead>
+            <tr>
+                <th>Run</th>
+                <th>Test</th>
+                <th>Results</th>
+                <th>Steps</th>
+                <th>Evidence</th>
+            </tr>
+        </thead>
+        <tbody>
+{"".join(run_rows)}
+        </tbody>
+    </table>
+</body>
+</html>'''
+
+    index_path = output_dir / "index.html"
+    index_path.write_text(dashboard_html, encoding="utf-8")
+    return index_path
+
+
+# ---------------------------------------------------------------------------
+# Batch report generation with run versioning
 # ---------------------------------------------------------------------------
 
 def generate_all_reports(
@@ -620,30 +921,51 @@ def generate_all_reports(
     output_dir: str | Path,
     *,
     formats: list[str] | None = None,
+    include_dashboard: bool = True,
 ) -> dict[str, Path]:
-    """Generate reports in all supported formats.
+    """Generate reports in a versioned run directory structure.
 
-    Convenience function that produces JSON, Markdown, HTML, and JUnit XML
-    reports from a single call.
+    Each call creates a new run-{timestamp} subdirectory under output_dir,
+    writes all report formats there, copies screenshots, and updates
+    a central dashboard index.html.
+
+    Directory structure::
+
+        results/
+        ├── index.html                  # Dashboard listing all runs
+        ├── run-2026-05-21T10-00-00-login/
+        │   ├── report.json
+        │   ├── report.html
+        │   ├── report.md
+        │   ├── report.xml
+        │   └── screenshots/
+        │       ├── step-1.png
+        │       └── step-2.png
+        └── run-2026-05-21T11-00-00-signup/
+            └── ...
 
     Args:
         result: A single TestResult or a list of TestResults.
-        output_dir: Directory to write reports to.
+        output_dir: Base directory for results (e.g., "results/").
         formats: List of formats to generate. Options:
                  "json", "markdown", "html", "junit".
                  Defaults to all four.
+        include_dashboard: Whether to generate/update the central
+                          index.html dashboard. Default True.
 
     Returns:
-        Dict mapping format name to output file path.
+        Dict mapping format name to output file path within the run dir,
+        plus "dashboard" pointing to the central index.html.
 
     Example:
-        >>> paths = generate_all_reports(result, "reports/")
+        >>> paths = generate_all_reports(result, "results/")
         >>> print(paths)
         {
-            "json": Path("reports/report.json"),
-            "markdown": Path("reports/report.md"),
-            "html": Path("reports/report.html"),
-            "junit": Path("reports/report.xml"),
+            "json": Path("results/run-2026-05-21T10-00-00/login/report.json"),
+            "markdown": Path(".../report.md"),
+            "html": Path(".../report.html"),
+            "junit": Path(".../report.xml"),
+            "dashboard": Path("results/index.html"),
         }
     """
     if isinstance(result, TestResult):
@@ -654,32 +976,38 @@ def generate_all_reports(
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Generate human-readable name from tests
-    if len(results) == 1:
-        base_name = results[0].test_name.lower().replace(" ", "-")[:50]
-    else:
-        base_name = "batch-report"
+    # Create run directory
+    run_dir = _create_run_directory(output_dir, results)
 
     formats = formats or ["json", "markdown", "html", "junit"]
     paths: dict[str, Path] = {}
 
     for fmt in formats:
         if fmt == "json":
-            path = output_dir / f"{base_name}.json"
-            path.write_text(generate_json(result), encoding="utf-8")
+            path = run_dir / "report.json"
+            path.write_text(generate_json(results), encoding="utf-8")
             paths["json"] = path
         elif fmt == "markdown":
-            path = output_dir / f"{base_name}.md"
-            path.write_text(generate_markdown(result), encoding="utf-8")
+            path = run_dir / "report.md"
+            path.write_text(generate_markdown(results), encoding="utf-8")
             paths["markdown"] = path
         elif fmt == "html":
-            path = output_dir / f"{base_name}.html"
-            generate_html_report(result, path)
+            path = run_dir / "report.html"
+            generate_html_report(results, path, screenshot_base=run_dir)
             paths["html"] = path
         elif fmt == "junit":
-            path = output_dir / f"{base_name}.xml"
-            path.write_text(generate_junit_xml(result), encoding="utf-8")
+            path = run_dir / "report.xml"
+            path.write_text(generate_junit_xml(results), encoding="utf-8")
             paths["junit"] = path
+
+    # Copy screenshots if present
+    if results:
+        _copy_screenshots(run_dir, results[0])
+
+    # Generate/update dashboard
+    if include_dashboard:
+        dashboard_path = _generate_dashboard_html(output_dir)
+        paths["dashboard"] = dashboard_path
 
     return paths
 
