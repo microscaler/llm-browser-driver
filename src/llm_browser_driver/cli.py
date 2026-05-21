@@ -25,6 +25,7 @@ import click
 from llm_browser_driver.agent import BrowserDriver, TestResult
 from llm_browser_driver.config import load_config
 from llm_browser_driver.report import generate_all_reports
+from llm_browser_driver.spec_parser import SpecParser
 
 
 # ---------------------------------------------------------------------------
@@ -384,6 +385,230 @@ def batch_cmd(ctx, url, model, llm_api, max_tokens, temperature,
 
 
 # ---------------------------------------------------------------------------
+# Spec subcommand
+# ---------------------------------------------------------------------------
+
+@click.command(name="spec")
+@_common_options
+@click.option(
+    "--spec",
+    "spec_path",
+    type=click.Path(exists=True, dir_okay=False),
+    required=True,
+    help="Path to an OpenAPI 3.x YAML specification file.",
+)
+@click.option(
+    "--mapping",
+    type=click.Path(exists=True, dir_okay=False),
+    default=None,
+    help="Path to a YAML file mapping API endpoints to frontend page paths.",
+)
+@click.option(
+    "--test-data",
+    type=click.Path(exists=True, dir_okay=False),
+    default=None,
+    help="Path to a YAML file with deterministic test data per endpoint.",
+)
+@click.option(
+    "--skip-get/--all-methods",
+    "include_get",
+    default=False,
+    help="Include GET endpoints in addition to POST/PUT/PATCH. Default: body methods only.",
+)
+@click.pass_context
+def spec_cmd(ctx, url, model, llm_api, max_tokens, temperature,
+             max_iterations, headless, screenshot_dir, screenshot_interval,
+             screenshot_on_failure, output, report_formats,
+             config, verbose, spec_path, mapping, test_data, include_get):
+    """Run spec-driven tests from an OpenAPI specification.
+
+    Parses the OpenAPI spec to identify endpoints with request bodies,
+    maps them to frontend pages via a mapping file, generates test goals,
+    and runs each through the exploratory driver.
+
+    The mapping file (YAML) connects API paths to frontend pages::
+
+        /api/v1/auth/signin: /signin
+        /api/v1/auth/signup: /signup
+        /api/v1/jobs: /post-a-job
+
+    The test data file (YAML) provides deterministic input values::
+
+        POST /api/v1/auth/signin:
+          email: ci-test@example.com
+          password: TestP@ss123!
+
+    The driver will:
+    - For each endpoint: explore the mapped page, validate form fields
+      exist and match the spec, submit with test data, check response.
+
+    Example::
+
+        llm-browser-driver spec \\\\
+            --spec openapi.yaml \\\\
+            --url http://staging.example.com \\\\
+            --mapping endpoint-mapping.yaml \\\\
+            --test-data test-data.yaml \\\\
+            --output ./spec-results \\\\
+            --verbose
+
+    """
+    # Parse the OpenAPI spec
+    click.echo(f"[*] Parsing spec: {spec_path}")
+    parser = SpecParser(spec_path=spec_path)
+
+    # Show spec info
+    info = parser.get_spec_info()
+    click.echo(f"    Title: {info['title']} v{info['version']}")
+
+    counts = parser.get_endpoint_count()
+    click.echo(f"    Endpoints: {dict(counts)} total")
+
+    # Get body endpoints (or all if --all-methods)
+    if include_get:
+        endpoints = parser.get_endpoints()
+    else:
+        endpoints = parser.get_body_endpoints()
+
+    click.echo(f"    Testing: {len(endpoints)} endpoint(s)")
+
+    # Load mapping
+    mapping_dict: dict[str, str] | None = None
+    if mapping:
+        mapping_path = Path(mapping)
+        mapping_dict = yaml.safe_load(mapping_path.read_text()) or {}
+        click.echo(f"    Mapping: {len(mapping_dict)} endpoint-to-page mappings")
+    else:
+        click.echo("    Warning: No mapping file provided. Endpoints without a mapped")
+        click.echo("    page will be skipped. Use --mapping to connect API paths to pages.")
+        click.echo("")
+        click.echo("    Skipping spec-driven testing without a mapping.")
+        click.echo("    Provide a mapping file to generate test goals.")
+        return
+
+    # Load test data
+    test_data_dict: dict[str, dict[str, Any]] | None = None
+    if test_data:
+        test_data_path = Path(test_data)
+        test_data_dict = yaml.safe_load(test_data_path.read_text()) or {}
+        click.echo(f"    Test data: {len(test_data_dict)} endpoint data sets")
+
+    # Generate goals
+    goals = parser.generate_goals(url, mapping_dict, test_data_dict)
+    if not goals:
+        click.echo("")
+        click.echo("    No test goals generated. Check that:")
+        click.echo("    1. The spec has endpoints with request bodies")
+        click.echo("    2. The mapping covers those endpoints")
+        click.echo("")
+        click.echo("    Available endpoints for mapping:")
+        for ep in endpoints:
+            click.echo(f"      {ep.identifier}")
+        return
+
+    click.echo(f"    Generated {len(goals)} test goal(s)")
+    click.echo("")
+
+    # Build config
+    overrides: dict[str, Any] = {
+        "llm": {
+            "model": model,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+        },
+        "agent": {"max_iterations": max_iterations},
+        "browser": {"headless": headless},
+    }
+    if llm_api:
+        overrides["llm"]["api_url"] = llm_api
+    if config:
+        overrides["config_file"] = config
+
+    config_obj = load_config(**overrides)
+
+    if verbose:
+        click.echo(f"[*] Model: {config_obj.llm.model}")
+        click.echo(f"[*] API: {config_obj.llm.api_url}")
+        click.echo(f"[*] Max iterations: {config_obj.agent.max_iterations}")
+        click.echo("")
+
+    driver = BrowserDriver(config=config_obj)
+
+    # Run each test goal
+    results: list[TestResult] = []
+    endpoint_results: list[dict[str, Any]] = []
+
+    for i, goal_info in enumerate(goals, 1):
+        ep = goal_info["endpoint"]
+        page_url = goal_info["page_url"]
+        goal_text = goal_info["goal"]
+
+        if verbose:
+            click.echo(f"[*] [{i}/{len(goals)}] Testing {ep.identifier} -> {page_url}")
+
+        r: TestResult = driver.explore(
+            url=page_url,
+            goal=goal_text,
+            max_iterations=max_iterations,
+            screenshot_dir=screenshot_dir,
+            screenshot_interval=screenshot_interval,
+            screenshot_on_failure=screenshot_on_failure,
+        )
+        results.append(r)
+
+        endpoint_results.append({
+            "endpoint": ep.identifier,
+            "url": page_url,
+            "status": r.status,
+            "iterations": r.iterations,
+            "findings": r.findings,
+            "console_errors": r.console_errors,
+            "error": r.error,
+        })
+
+    # Print spec-driven summary
+    passed = sum(1 for e in endpoint_results if e["status"] == "success")
+    failed = sum(1 for e in endpoint_results if e["status"] == "error")
+    skipped = sum(1 for e in endpoint_results if e["status"] == "skipped")
+
+    click.echo("")
+    click.echo("=" * 60)
+    click.echo(" Spec-Driven Test Summary")
+    click.echo("=" * 60)
+    click.echo(f" Spec: {info['title']} v{info['version']}")
+    click.echo(f" Endpoints tested: {len(endpoint_results)}")
+    click.echo(f" Passed: {passed}")
+    click.echo(f" Failed: {failed}")
+    click.echo("=" * 60)
+
+    # Per-endpoint detail
+    for e in endpoint_results:
+        status_icon = "✓" if e["status"] == "success" else "✗"
+        click.echo(f"  {status_icon} {e['endpoint']}")
+        click.echo(f"      URL: {e['url']}")
+        if e["findings"]:
+            for f in e["findings"]:
+                severity = f.get("severity", "info").upper()
+                desc = f.get("description", "")[:100]
+                click.echo(f"      [{severity}] {desc}")
+        if e["console_errors"]:
+            for ce in e["console_errors"]:
+                click.echo(f"      [CONSOLE] {ce.get('text', '')[:100]}")
+
+    # Generate reports
+    if output:
+        report_dir = Path(output)
+        paths = generate_all_reports(results, report_dir, formats=report_formats.split(","))
+        click.echo("")
+        click.echo(" Reports generated:")
+        for fmt, path in paths.items():
+            click.echo(f"  [{fmt}] {path}")
+
+    if failed > 0:
+        sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
 # Serve subcommand
 # ---------------------------------------------------------------------------
 
@@ -498,6 +723,7 @@ def main(ctx):
 
 main.add_command(explore_cmd)
 main.add_command(batch_cmd)
+main.add_command(spec_cmd)
 main.add_command(serve_cmd)
 
 if __name__ == "__main__":
