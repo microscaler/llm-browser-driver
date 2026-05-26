@@ -321,7 +321,6 @@ class BrowserDriver:
                     "width": self.config.browser.viewport_width,
                     "height": self.config.browser.viewport_height,
                 },
-                viewport_size={"width": self.config.browser.viewport_width, "height": self.config.browser.viewport_height},
             )
 
         page = context.new_page()
