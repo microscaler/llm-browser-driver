@@ -279,6 +279,7 @@ def find_field(page: Page, field_text: str) -> tuple[bool, str]:
                 or field_lower in ta_id.lower()
                 or field_lower in ta_aria_label.lower()
                 or field_lower in ta_label.lower()
+                or (ta_testid and field_lower in ta_testid.lower())
             ):
                 display = (
                     ta_label
@@ -286,6 +287,7 @@ def find_field(page: Page, field_text: str) -> tuple[bool, str]:
                     or ta_id
                     or ta_name
                     or ta_placeholder
+                    or ta_testid
                 )
                 return True, display
 

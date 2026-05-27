@@ -87,6 +87,25 @@ def execute_fill(page: Page, action: dict[str, str]) -> str:
         return f"Could not find field matching: {field[:100]}"
 
     # Fill the matched field
+    # First try: exact data-testid match using the display name from find_field()
+    # This handles SolidJS forms where fields only have data-testid
+    display_testid = display if display else field
+    for testid_variant in [
+        display_testid,
+        f"input-{display_testid.lower().replace(' ', '-')}",
+        display_testid.lower().replace(' ', '-'),
+    ]:
+        for tag in ["textarea", "input"]:
+            try:
+                locator = page.locator(f"{tag}[data-testid='{testid_variant}']")
+                if locator.count() > 0:
+                    locator.first.fill(value, timeout=5000)
+                    tag_type = "textarea" if tag == "textarea" else "input"
+                    return f"Filled {tag_type} '{testid_variant}' with '{value[:50]}'"
+            except Exception:
+                continue
+
+    # Second try: iterate all inputs/textareas with multi-criteria matching
     for inp in page.locator(
         "input:not([type=hidden]):not([type=submit]):not([type=button]), textarea"
     ).all()[:70]:
@@ -95,6 +114,7 @@ def execute_fill(page: Page, action: dict[str, str]) -> str:
             inp_placeholder = inp.get_attribute("placeholder") or ""
             inp_id = inp.get_attribute("id") or ""
             inp_aria_label = inp.get_attribute("aria-label") or ""
+            inp_testid = inp.get_attribute("data-testid") or ""
 
             # Get label text
             inp_label = ""
@@ -111,9 +131,11 @@ def execute_fill(page: Page, action: dict[str, str]) -> str:
                 or field_lower in inp_id.lower()
                 or field_lower in inp_aria_label.lower()
                 or field_lower in inp_label.lower()
+                or (inp_testid and field_lower in inp_testid.lower())
             ):
                 inp.fill(value, timeout=5000)
-                return f"Filled input '{display}' with '{value[:50]}'"
+                tag = "textarea" if inp.evaluate("el => el.tagName.toLowerCase()") == "textarea" else "input"
+                return f"Filled {tag} '{display}' with '{value[:50]}'"
         except Exception:
             continue
 
