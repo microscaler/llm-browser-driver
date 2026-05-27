@@ -224,7 +224,15 @@ def find_field(page: Page, field_text: str) -> tuple[bool, str]:
     except Exception:
         pass
 
-    # Strategy 3: Try inputs first (name → placeholder → id → aria-label → label)
+    # Strategy 3: Try inputs first — prefer EXACT matches over substring matches
+    # Only match placeholder if the search term is specific (not generic words)
+    generic_words = {"select", "required", "optional", "e.g.", "eg", "enter", "type"}
+    input_terms = [t for t in field_text.lower().split() if t not in generic_words]
+    
+    # If no specific terms remain after filtering, skip placeholder matching for this input
+    if not input_terms:
+        input_terms = [field_text.lower()]  # fallback to full term
+    
     inputs = page.locator(
         "input:not([type=hidden]):not([type=submit]):not([type=button])"
     )
@@ -241,13 +249,31 @@ def find_field(page: Page, field_text: str) -> tuple[bool, str]:
             inp_label = _get_field_label(page, inp)
 
             field_lower = field_text.lower()
-            if (
-                field_lower in inp_name.lower()
-                or field_lower in inp_placeholder.lower()
-                or field_lower in inp_id.lower()
-                or field_lower in inp_aria_label.lower()
-                or field_lower in inp_label.lower()
-            ):
+            
+            # STRATEGY 3a: Prefer testid match (most specific)
+            if inp_testid and any(t in inp_testid.lower() for t in input_terms):
+                display = (
+                    inp_label
+                    or inp_aria_label
+                    or inp_id
+                    or inp_name
+                    or inp_placeholder
+                )
+                return True, display
+
+            # STRATEGY 3b: Prefer label[for] / aria-label match (human-readable)
+            if inp_label and any(t in inp_label.lower() for t in input_terms):
+                display = (
+                    inp_label
+                    or inp_aria_label
+                    or inp_id
+                    or inp_name
+                    or inp_placeholder
+                )
+                return True, display
+
+            # STRATEGY 3c: Exact placeholder match (not substring — avoid "e.g., ..." matching everything)
+            if inp_placeholder and any(inp_placeholder.lower() == t or t in inp_placeholder.lower() for t in input_terms):
                 display = (
                     inp_label
                     or inp_aria_label
