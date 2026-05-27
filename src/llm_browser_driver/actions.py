@@ -138,6 +138,10 @@ def execute_fill(page: Page, action: dict[str, str]) -> str:
                 or field_lower in inp_label.lower()
                 or (inp_testid and field_lower in inp_testid.lower())
             ):
+                # Check if already filled with same value — prevent infinite loops
+                current_value = inp.input_value()
+                if current_value.strip() == value.strip():
+                    return f"Already filled '{inp_testid or inp_placeholder or inp_label}' (value matches, no change)"
                 inp.fill(value, timeout=5000)
                 tag = "textarea" if inp.evaluate("el => el.tagName.toLowerCase()") == "textarea" else "input"
                 return f"Filled {tag} '{display}' with '{value[:50]}'"
