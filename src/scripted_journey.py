@@ -30,7 +30,7 @@ from llm_browser_driver.config import load_config
 from llm_browser_driver.state import get_page_state, build_page_summary, detect_current_step
 from llm_browser_driver.selector import find_custom_dropdown_trigger, click_custom_dropdown_option
 from llm_browser_driver.actions import execute_fill
-from hauliage_driver_config import HauliageDriverConfig
+from hauliage_driver_config import PICKUP_COUNTRY_OPTIONS
 
 FRONTEND_URL = "http://localhost:7174/shipper/post-a-job"
 LLM_URL = "http://192.168.1.104:8000/v1"
@@ -80,11 +80,12 @@ def find_and_click_button(page, button_text):
 
 def select_dropdown(page, trigger_text, option_text):
     """Open a custom dropdown and select an option."""
-    trigger = find_custom_dropdown_trigger(page, trigger_text)
-    if not trigger:
-        return False, f"Could not find dropdown trigger: {trigger_text}"
+    found, message = find_custom_dropdown_trigger(page, trigger_text)
+    if not found:
+        return False, message
     
-    trigger.click()
+    # trigger is a Playwright element (locatable)
+    page.locator(f"text='{trigger_text}'").first.click()
     page.wait_for_timeout(1000)
     
     success = click_custom_dropdown_option(page, option_text)
@@ -223,7 +224,7 @@ def run_journey():
                     
                     # Try to select pickup country
                     print("\n[11/9] Step 2: Trying to select pickup country...")
-                    countries = HauliageDriverConfig.PICKUP_COUNTRIES
+                    countries = PICKUP_COUNTRY_OPTIONS
                     if countries:
                         first_country = countries[0]["name"]
                         print(f"     First available country: {first_country}")
