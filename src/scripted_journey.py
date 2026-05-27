@@ -264,26 +264,172 @@ def run_journey():
                     results.append({"step": "step2_exploration", "details": info})
                     
                     # Try to select pickup country
-                    print("\n[11/9] Step 2: Trying to select pickup country...")
+                    print("\n[12/11] Step 2: Selecting pickup country...")
                     countries = PICKUP_COUNTRY_OPTIONS
                     if countries:
-                        first_country = countries[0]["name"]
+                        first_country = countries[0]
                         print(f"     First available country: {first_country}")
                         page.wait_for_timeout(500)
                         success, msg = select_dropdown(page, "Select country", first_country)
-                        print(f"     {msg} → {'✓' if success else '✗'}")
+                        print(f"     Country: {msg} → {'✓' if success else '✗'}")
                         results.append({"step": "pickup_country", "status": "ok" if success else "fail", "details": msg})
                         
                         if success:
-                            # Check for state/province dropdown
+                            # After country selection, state dropdown should appear
+                            page.wait_for_timeout(1500)
+                            
+                            # Dump state dropdown options
+                            state_options = page.evaluate("""
+                            () => {
+                                const stateBtn = [...document.querySelectorAll('[data-testid]')].find(el => 
+                                    el.getAttribute('data-testid')?.includes('select-pickup-state'));
+                                if (!stateBtn) return { visible: false, text: 'State button not found' };
+                                // Open the dropdown to see options
+                                return { 
+                                    visible: true, 
+                                    text: stateBtn.textContent.trim(),
+                                    testid: stateBtn.getAttribute('data-testid'),
+                                };
+                            }
+                            """)
+                            print(f"     State dropdown: {state_options.get('text', 'N/A')}")
+                            
+                            # Check if state dropdown is enabled (not "Select a country first")
+                            if "Select a country first" in state_options.get("text", ""):
+                                print("     State dropdown still says 'Select a country first' — waiting for API...")
+                                page.wait_for_timeout(3000)
+                                state_options = page.evaluate("""
+                                () => {
+                                    const stateBtn = [...document.querySelectorAll('[data-testid]')].find(el => 
+                                        el.getAttribute('data-testid')?.includes('select-pickup-state'));
+                                    if (!stateBtn) return { text: 'Not found' };
+                                    return stateBtn.textContent.trim();
+                                }
+                                """)
+                                print(f"     After wait: {state_options}")
+                            
+                            # Select state if available (try a common one like "California" or first option)
+                            page.wait_for_timeout(500)
+                            state_success = False
+                            state_msg = ""
+                            for test_state in ["California", "New York", "Texas", "London"]:
+                                page.wait_for_timeout(300)
+                                state_success, state_msg = select_dropdown(page, "Select a country first", test_state)
+                                if state_success:
+                                    print(f"     State '{test_state}': {state_msg} → ✓")
+                                    results.append({"step": "pickup_state", "status": "ok", "details": state_msg})
+                                    break
+                                else:
+                                    # Try first available option by selecting from "Select a country first"
+                                    # This might be a state option already shown
+                                    pass
+                            
+                            if not state_success:
+                                # Try to just click the state button and see what options exist
+                                print("     State dropdown not found with common names — trying first available option")
+                                state_btns = page.locator("[data-testid*='select-pickup-state']")
+                                if state_btns.count() > 0:
+                                    state_btn = state_btns.first
+                                    current_text = state_btn.inner_text()
+                                    print(f"     State button text: '{current_text}'")
+                                    state_btn.click()
+                                    page.wait_for_timeout(800)
+                                    # Try to find any li option in the dropdown
+                                    options = page.locator("li.cursor-pointer").all()
+                                    if options:
+                                        first_state = options[0].inner_text().strip()
+                                        print(f"     First state option: '{first_state}'")
+                                        page.locator("li.cursor-pointer").first.click()
+                                        page.wait_for_timeout(500)
+                                        state_success = True
+                                        state_msg = f"Selected state: {first_state}"
+                                        results.append({"step": "pickup_state", "status": "ok", "details": state_msg})
+                                    else:
+                                        print("     No state options found — state dropdown may need country API response")
+                                        results.append({"step": "pickup_state", "status": "fail", "details": "No state options available"})
+                                else:
+                                    print("     No state button found")
+                                    results.append({"step": "pickup_state", "status": "info", "details": "No state dropdown visible"})
+                            
+                            # Try to select city if state was selected
+                            if state_success:
+                                page.wait_for_timeout(1000)
+                                city_btns = page.locator("[data-testid*='select-pickup-city']")
+                                if city_btns.count() > 0:
+                                    city_btn_text = city_btns.first.inner_text()
+                                    print(f"     City button text: '{city_btn_text}'")
+                                    city_btns.first.click()
+                                    page.wait_for_timeout(800)
+                                    city_options = page.locator("li.cursor-pointer").all()
+                                    if city_options:
+                                        first_city = city_options[0].inner_text().strip()
+                                        print(f"     First city option: '{first_city}'")
+                                        page.locator("li.cursor-pointer").first.click()
+                                        page.wait_for_timeout(500)
+                                        city_msg = f"Selected city: {first_city}"
+                                        print(f"     {city_msg} → ✓")
+                                        results.append({"step": "pickup_city", "status": "ok", "details": city_msg})
+                                    else:
+                                        print("     No city options found")
+                                        results.append({"step": "pickup_city", "status": "info", "details": "No city dropdown options"})
+                                else:
+                                    print("     No city button found")
+                                    results.append({"step": "pickup_city", "status": "info", "details": "No city dropdown visible"})
+                            else:
+                                results.append({"step": "pickup_city", "status": "info", "details": "Skipped — state not selected"})
+                            
+                            # Fill pickup address
+                            print("\n     Filling pickup address...")
+                            addr_success, addr_msg = fill_field(page, "input-pickup-address", "123 Test Street")
+                            print(f"     {addr_msg} → {'✓' if addr_success else '✗'}")
+                            results.append({"step": "pickup_address", "status": "ok" if addr_success else "fail", "details": addr_msg})
+                            
+                            # Fill pickup date (future date)
+                            print("\n     Filling pickup date...")
+                            date_success, date_msg = fill_field(page, "input-pickup-date", "2026-06-15")
+                            print(f"     {date_msg} → {'✓' if date_success else '✗'}")
+                            results.append({"step": "pickup_date", "status": "ok" if date_success else "fail", "details": date_msg})
+                            
+                            # Fill pickup time
+                            print("\n     Filling pickup times...")
+                            t1_success, t1_msg = fill_field(page, "input-pickup-time-start", "09:00")
+                            print(f"     Start: {t1_msg} → {'✓' if t1_success else '✗'}")
+                            t2_success, t2_msg = fill_field(page, "input-pickup-time-end", "17:00")
+                            print(f"     End: {t2_msg} → {'✓' if t2_success else '✗'}")
+                            results.append({"step": "pickup_times", "status": "ok" if t1_success and t2_success else "fail",
+                                           "details": f"{t1_msg}, {t2_msg}"})
+                            
+                            # Try to advance to Step 3
+                            print("\n[18/11] Step 2 → Step 3: Clicking Next Step...")
                             page.wait_for_timeout(1000)
+                            nav_success = find_and_click_button(page, "Next Step")
+                            page.wait_for_timeout(3000)
+                            print(f"     {'✓' if nav_success else '✗'} Clicked Next Step")
+                            results.append({"step": "next_to_step3", "status": "ok" if nav_success else "fail"})
+                            
                             info = get_page_info(page)
-                            print(f"\n     After country selection:")
-                            print(f"     Step: {info['step']}")
-                            print(f"     Buttons: {info['buttons']}")
-                            results.append({"step": "after_country_select", "details": info})
+                            print(f"     NEW STEP: {info['step']}")
+                            print(f"     NEW URL: {info['url']}")
+                            results.append({"step": "after_step3", "details": info})
+                            
+                            if info["step"] and "Step 3" in info["step"]:
+                                print("\n     ✓✓✓ SUCCESS! Reached Step 3: Delivery Location")
+                            elif "validation-error-banner" in info.get("buttons", "") or "error" in str(info).lower():
+                                # Check for validation errors
+                                banner_text = page.evaluate("document.getElementById('validation-error-banner')?.textContent || ''")
+                                if banner_text:
+                                    print(f"     Validation error: {banner_text[:200]}")
+                                    results.append({"step": "validation_error", "status": "fail", "details": banner_text[:200]})
+                                else:
+                                    print(f"     Failed to advance — Step: {info['step']}")
+                            else:
+                                print(f"     Failed to advance to Step 3 — Step: {info['step']}")
+                                results.append({"step": "failed_to_advance", "status": "fail", "details": f"Still on: {info['step']}"})
+                        else:
+                            print(f"     Country selection failed: {msg}")
+                            results.append({"step": "pickup_country", "status": "fail", "details": msg})
                     else:
-                        print("     No countries configured in hauliage_driver_config")
+                        print("     No countries configured")
                         results.append({"step": "no_countries", "status": "info"})
                 else:
                     print(f"\n     ✗✗✗ FAILED! Still on step: {info['step']}")
@@ -320,8 +466,12 @@ def run_journey():
             for i, r in enumerate(results, 1):
                 status_icon = "✓" if r.get("status") == "ok" else ("✗" if r.get("status") == "fail" else "ℹ")
                 stage = r.get("step", "unknown")
-                details = r.get("details", "")[:80]
-                print(f"    {i:2d}. [{status_icon}] {stage:20s} {details}")
+                details = r.get("details", "")
+                if isinstance(details, dict):
+                    details_str = json.dumps(details, default=str)[:80]
+                else:
+                    details_str = str(details)[:80]
+                print(f"    {i:2d}. [{status_icon}] {stage:20s} {details_str}")
             
             # Check if we reached Step 2
             reached_step2 = any(
