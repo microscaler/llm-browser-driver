@@ -398,23 +398,33 @@ class BrowserDriver:
                 
                 # Check if any dropdown was selected
                 dropdown_actions = [r for r in action_history if r.get('action') in ('select_custom', 'select')]
+                dropdown_count = len(dropdown_actions)
                 
-                # If fields are filled AND dropdowns selected AND navigation button exists but not attempted,
-                # add an explicit instruction
+                # Conservative heuristic: only suggest navigation when SIGNIFICANT form interaction occurred
+                # Require both fills AND dropdowns to ensure substantial progress
+                form_interacted = fill_count >= 3 and dropdown_count >= 1
+                # Only suggest, never auto-click (LLM may not follow, but auto-clicking breaks validation)
                 navigation_hint = ""
                 auto_click_nav = False
-                # More permissive: any form interaction (fill OR dropdown) + nav button exists
-                form_interacted = fill_count >= 1 or len(dropdown_actions) >= 1
                 if form_interacted and nav_buttons and not nav_attempted:
                     btn_text = ", ".join(b["text"] for b in nav_buttons)
                     navigation_hint = (
-                        "\n**NAVIGATION SUGGESTION**: Form fields have been filled and dropdowns selected. "
-                        "Nav buttons available: " + btn_text + ". Click one to proceed to the next step.\n"
+                        f"\n**NAVIGATION SUGGESTION**: You have performed {fill_count} fills and {dropdown_count} dropdown selections. "
+                        f"Nav buttons available: {btn_text}. If all form fields are filled, click one to proceed.\n"
                     )
-                    auto_click_nav = True
                     print(
-                        f"[ITER {iteration}] NAV HINT TRIGGERED: "
-                        f"fill={fill_count}, dropdowns={len(dropdown_actions)}, nav={btn_text}",
+                        f"[ITER {iteration}] NAV HINT (suggestion only): "
+                        f"fills={fill_count}, dropdowns={dropdown_count}, nav={btn_text}",
+                        flush=True,
+                    )
+                elif form_interacted and nav_attempted and not nav_buttons:
+                    # LLM tried to click Next but it failed (validation error), suggest checking errors
+                    navigation_hint = (
+                        "\n**NOTE**: You attempted to navigate but the Next Step button is now disabled. "
+                        "This likely means validation failed — check for red error messages on the page and fill any missing fields.\n"
+                    )
+                    print(
+                        f"[ITER {iteration}] NAV FAILED: Next Step disabled, suggesting validation check",
                         flush=True,
                     )
 
@@ -429,7 +439,14 @@ CURRENT PAGE STATE:
 Based on the goal, action history, and current page state, decide the next action to take.
 """
 
-                # LLM decides next action
+                # DEBUG: Print page summary to understand what LLM sees
+                if iteration <= 5:
+                    print(f"\n[ITER {iteration}] PAGE SUMMARY SNAPSHOT:", flush=True)
+                    # Print just the forms section
+                    form_lines = [l for l in page_summary.split('\n') if any(k in l for k in ['INPUTS', 'TEXTAREAS', 'BUTTONS', 'SELECTS', 'CUSTOM', 'FORM FIELDS'])]
+                    for line in form_lines[:30]:
+                        print(f"  {line}", flush=True)
+
                 llm_response = self.llm.chat(system_prompt, user_prompt)
                 action = parse_action_from_response(llm_response)
                 
