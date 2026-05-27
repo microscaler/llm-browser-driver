@@ -91,7 +91,7 @@ def execute_fill(page: Page, action: dict[str, str]) -> str:
     # This handles SolidJS forms where fields only have data-testid
     display_testid = display if display else field
     
-    # Check if field is already filled with the same value — prevent infinite loops
+    # Check if field is already filled — prevent infinite loops
     for testid_variant in [
         display_testid,
         f"input-{display_testid.lower().replace(' ', '-')}",
@@ -102,8 +102,10 @@ def execute_fill(page: Page, action: dict[str, str]) -> str:
                 locator = page.locator(f"{tag}[data-testid='{testid_variant}']")
                 if locator.count() > 0:
                     current_value = locator.first.input_value()
-                    if current_value.strip() == value.strip():
-                        return f"Already filled '{testid_variant}' (value matches, no change)"
+                    if current_value.strip():
+                        # Field already has content — report it and skip
+                        tag_type = "textarea" if tag == "textarea" else "input"
+                        return f"Already filled '{testid_variant}' (current: '{current_value.strip()[:50]}'). Skip."
                     locator.first.fill(value, timeout=5000)
                     tag_type = "textarea" if tag == "textarea" else "input"
                     return f"Filled {tag_type} '{testid_variant}' with '{value[:50]}'"
@@ -138,10 +140,11 @@ def execute_fill(page: Page, action: dict[str, str]) -> str:
                 or field_lower in inp_label.lower()
                 or (inp_testid and field_lower in inp_testid.lower())
             ):
-                # Check if already filled with same value — prevent infinite loops
+                # Check if field already has any content — report and skip
                 current_value = inp.input_value()
-                if current_value.strip() == value.strip():
-                    return f"Already filled '{inp_testid or inp_placeholder or inp_label}' (value matches, no change)"
+                if current_value.strip():
+                    tag = "textarea" if inp.evaluate("el => el.tagName.toLowerCase()") == "textarea" else "input"
+                    return f"Already filled '{inp_testid or inp_placeholder or inp_label}' (current: '{current_value.strip()[:50]}'). Skip."
                 inp.fill(value, timeout=5000)
                 tag = "textarea" if inp.evaluate("el => el.tagName.toLowerCase()") == "textarea" else "input"
                 return f"Filled {tag} '{display}' with '{value[:50]}'"
