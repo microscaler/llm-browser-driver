@@ -114,30 +114,106 @@ def click_by_link(page: Page, element_text: str) -> tuple[bool, str]:
 # ---------------------------------------------------------------------------
 
 
-def find_field(page: Page, field_text: str) -> tuple[bool, str]:
-    """Try to find an input or textarea field by multiple criteria.
-
-    Checks: name → placeholder → id → aria-label → label[for] text →
-    label[data-for] text. First match wins. This is the fill field matching
-    strategy.
+def _get_field_label(page: Page, field_el) -> str:
+    """Get the display label for a form field by checking label[for], label[data-for],
+    or the nearest <label> sibling/ancestor (SolidJS pattern).
 
     Args:
         page: Playwright Page object.
-        field_text: The field text from the LLM (e.g., "email", "First Name").
+        field_el: Playwright element handle.
+
+    Returns:
+        Label text string, or empty string.
+    """
+    # Try label[for="id"]
+    inp_id_attr = field_el.get_attribute("id") or ""
+    if inp_id_attr:
+        label_el = page.locator(f"label[for='{inp_id_attr}']")
+        if label_el.count() > 0:
+            return label_el.first.inner_text(timeout=500).strip()
+        label_el = page.locator(f"label[data-for='{inp_id_attr}']")
+        if label_el.count() > 0:
+            return label_el.first.inner_text(timeout=500).strip()
+
+    # Try label[data-for] where data-for matches field data-testid
+    testid = field_el.get_attribute("data-testid") or ""
+    if testid:
+        label_el = page.locator(f"label[data-for='{testid}']")
+        if label_el.count() > 0:
+            return label_el.first.inner_text(timeout=500).strip()
+
+    # SolidJS pattern: label is the preceding sibling or parent <label> wrapping the field
+    try:
+        # Check if field is wrapped in a <label>
+        parent_label = field_el.evaluate_handle("el => { let p = el.parentElement; while(p) { if(p.tagName === 'LABEL') return p; p = p.parentElement; } return null; }")
+        if parent_label:
+            return parent_label.inner_text(timeout=500).strip()
+
+        # Check preceding label sibling
+        prev_label = field_el.evaluate_handle("el => { let p = el.previousElementSibling; while(p) { if(p.tagName === 'LABEL') return p; p = p.previousElementSibling; } return null; }")
+        if prev_label:
+            return prev_label.inner_text(timeout=500).strip()
+    except Exception:
+        pass
+
+    return ""
+
+
+def find_field(page: Page, field_text: str) -> tuple[bool, str]:
+    """Try to find an input or textarea field by multiple criteria.
+
+    Checks in priority order:
+    1. data-testid match (highest confidence — matches 'input-description' for 'description')
+    2. name → placeholder → id → aria-label → label[for] text → label[data-for] text
+    3. Nearby label detection (SolidJS pattern where label has no for/data-for)
+
+    Args:
+        page: Playwright Page object.
+        field_text: The field text from the LLM (e.g., "email", "First Name", "Description").
 
     Returns:
         (success, display_name_or_empty) tuple. The display name is the first
         matching identifier found (label > aria-label > id > name > placeholder).
     """
-    # Try label[data-for] text match first (covers cases where the label
-    # text itself is the search term and no name/placeholder/id exists on input)
+    # Strategy 1: Match by data-testid (most reliable for SolidJS forms)
+    # Convert field_text to testid-friendly form: "Description" → "input-description"
+    # or "pickup country" → "pickup-country"
+    testid_keywords = field_text.lower().split()
+    testid_patterns = []
+    for kw in testid_keywords:
+        if kw not in ("select", "required", "*"):
+            testid_patterns.append(kw)
+        else:
+            testid_patterns.append("")
+    testid_patterns.append(f"{testid_keywords[0] if testid_keywords else ''}")  # first word
+    testid_patterns.append(f"{testid_keywords[-1] if testid_keywords else ''}")  # last word
+
+    for pattern in [
+        f"input[data-testid*='{field_text.lower().replace(' ', '-')}']",
+        f"textarea[data-testid*='{field_text.lower().replace(' ', '-')}']",
+        f"input[data-testid*='{field_text.lower().replace(' ', '')}']",
+        f"textarea[data-testid*='{field_text.lower().replace(' ', '')}']",
+        # Try with common prefixes
+        f"input[data-testid='input-{field_text.lower().replace(' ', '-')}']",
+        f"textarea[data-testid='input-{field_text.lower().replace(' ', '-')}']",
+    ]:
+        try:
+            locator = page.locator(pattern)
+            if locator.count() > 0:
+                text = locator.first.inner_text(timeout=500).strip()
+                label = _get_field_label(page, locator.first)
+                display = label or text or field_text
+                return True, display
+        except Exception:
+            continue
+
+    # Strategy 2: Try label[for] text match first (React-style)
     try:
         labels = page.locator("label[data-for]")
         for lbl in labels.all()[:50]:
             try:
                 lbl_text = lbl.inner_text(timeout=500).strip().lower()
                 if field_text.lower() in lbl_text or lbl_text in field_text.lower():
-                    # Find the associated input via data-for attribute
                     for_val = lbl.get_attribute("data-for") or ""
                     if for_val:
                         inp = page.locator(f"#{for_val}")
@@ -148,7 +224,7 @@ def find_field(page: Page, field_text: str) -> tuple[bool, str]:
     except Exception:
         pass
 
-    # Try inputs first
+    # Strategy 3: Try inputs first (name → placeholder → id → aria-label → label)
     inputs = page.locator(
         "input:not([type=hidden]):not([type=submit]):not([type=button])"
     )
@@ -159,19 +235,10 @@ def find_field(page: Page, field_text: str) -> tuple[bool, str]:
             inp_placeholder = inp.get_attribute("placeholder") or ""
             inp_id = inp.get_attribute("id") or ""
             inp_aria_label = inp.get_attribute("aria-label") or ""
+            inp_testid = inp.get_attribute("data-testid") or ""
 
-            # Get label text by finding associated <label> element
-            inp_label = ""
-            inp_id_attr = inp.get_attribute("id")
-            if inp_id_attr:
-                label_el = page.locator(f"label[for='{inp_id_attr}']")
-                if label_el.count() > 0:
-                    inp_label = label_el.first.inner_text(timeout=500).strip()
-                # Also try label[data-for='{inp_id_attr}'] (React-style)
-                else:
-                    label_el = page.locator(f"label[data-for='{inp_id_attr}']")
-                    if label_el.count() > 0:
-                        inp_label = label_el.first.inner_text(timeout=500).strip()
+            # Get label text
+            inp_label = _get_field_label(page, inp)
 
             field_lower = field_text.lower()
             if (
@@ -181,7 +248,6 @@ def find_field(page: Page, field_text: str) -> tuple[bool, str]:
                 or field_lower in inp_aria_label.lower()
                 or field_lower in inp_label.lower()
             ):
-                # Use the matched identifier for the result
                 display = (
                     inp_label
                     or inp_aria_label
@@ -194,7 +260,7 @@ def find_field(page: Page, field_text: str) -> tuple[bool, str]:
         except Exception:
             continue
 
-    # Try textareas
+    # Strategy 4: Try textareas (name → placeholder → id → aria-label → label → testid)
     textareas = page.locator("textarea")
     for ta in textareas.all()[:20]:
         try:
@@ -202,13 +268,9 @@ def find_field(page: Page, field_text: str) -> tuple[bool, str]:
             ta_placeholder = ta.get_attribute("placeholder") or ""
             ta_id = ta.get_attribute("id") or ""
             ta_aria_label = ta.get_attribute("aria-label") or ""
+            ta_testid = ta.get_attribute("data-testid") or ""
 
-            ta_label = ""
-            ta_id_attr = ta.get_attribute("id")
-            if ta_id_attr:
-                label_el = page.locator(f"label[for='{ta_id_attr}']")
-                if label_el.count() > 0:
-                    ta_label = label_el.first.inner_text(timeout=500).strip()
+            ta_label = _get_field_label(page, ta)
 
             field_lower = field_text.lower()
             if (

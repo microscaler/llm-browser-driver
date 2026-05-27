@@ -102,6 +102,7 @@ def extract_textareas(page: Page) -> list[dict[str, Any]]:
                 "id": el.get_attribute("id") or "",
                 "disabled": el.is_disabled(),
                 "rows": el.get_attribute("rows") or "",
+                "data-testid": el.get_attribute("data-testid") or "",
                 "value": el.inner_text(timeout=500).strip(),
             }
             textareas.append(info)
@@ -517,10 +518,24 @@ def build_page_summary(snapshot: dict[str, Any]) -> str:
     if details.get("inputs"):
         sections.append(f"\n--- INPUTS ---")
         for inp in details["inputs"][:20]:
+            testid = inp.get('data-testid', '')
             sections.append(
                 f"  type={inp['type']}, name={inp['name']}, "
                 f"placeholder={inp['placeholder']}, aria-label={inp['aria_label']}, "
                 f"disabled={inp['disabled']}, value={inp['value']}"
+                + (f", test_id='{testid}'" if testid else "")
+            )
+
+    # Textareas detail
+    if details.get("textareas"):
+        sections.append(f"\n--- TEXTAREAS ---")
+        for ta in details["textareas"][:10]:
+            testid = ta.get('data-testid', '')
+            sections.append(
+                f"  name={ta['name']}, placeholder={ta['placeholder']}, "
+                f"aria-label={ta['aria_label']}, disabled={ta['disabled']}, "
+                f"value={ta['value']}"
+                + (f", test_id='{testid}'" if testid else "")
             )
 
     # Buttons detail
