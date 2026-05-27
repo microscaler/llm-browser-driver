@@ -414,6 +414,7 @@ class BrowserDriver:
 
 CURRENT PAGE STATE:
 {page_summary}
+{navigation_hint}
 
 Based on the goal, action history, and current page state, decide the next action to take.
 """
