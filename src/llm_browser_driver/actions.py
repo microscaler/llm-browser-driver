@@ -142,103 +142,27 @@ def execute_fill(page: Page, action: dict[str, str]) -> str:
     return f"Could not fill field matching: {field[:100]}"
 
 
-def execute_fill(page: Page, action: dict[str, str]) -> str:
-    """Execute a fill action with multi-strategy field finding.
 
-    Checks: name → placeholder → id → aria-label → label[for] text.
-    First match fills the field.
 
-    If the field is a button (SolidJS dropdown trigger), click it to open
-    the dropdown — the LLM will follow with a `select_custom` action.
+
+def execute_select(page: Page, action: dict[str, str]) -> str:
+    """Execute a select action for dropdown options.
 
     Args:
         page: Playwright Page object.
-        action: Action dict with "field" and "value" keys.
+        action: Action dict with "field" and "option" keys.
 
     Returns:
         Result message string.
     """
     field = action.get("field", "")
-    value = action.get("value", "")
+    option = action.get("option", "")
 
-    found, display = selector.find_field(page, field)
+    found, select_name = selector.find_select_field(page, field)
     if not found:
-        return f"Could not find field matching: {field[:100]}"
+        return f"Could not find select field matching: {field[:100]}"
 
-    # Check if it's a button (SolidJS dropdown trigger) — click to open, don't fill
-    try:
-        btn = page.locator(f"button[data-testid='{display}']")
-        if btn.count() > 0:
-            btn.first.click(timeout=5000)
-            return f"Clicked dropdown button '{display}' (opens menu for selection)"
-        # Also try matching by text content
-        btns = page.locator("button")
-        for b in btns.all()[:50]:
-            try:
-                btext = b.inner_text(timeout=500).strip()
-                if field.lower() in btext.lower() or btext.lower() in field.lower():
-                    b.click(timeout=5000)
-                    return f"Clicked dropdown button '{btext}' (opens menu for selection)"
-            except Exception:
-                continue
-    except Exception:
-        pass
-
-    # Fill the matched field
-    # First try: exact data-testid match using the display name from find_field()
-    # This handles SolidJS forms where fields only have data-testid
-    display_testid = display if display else field
-    for testid_variant in [
-        display_testid,
-        f"input-{display_testid.lower().replace(' ', '-')}",
-        display_testid.lower().replace(' ', '-'),
-    ]:
-        for tag in ["textarea", "input"]:
-            try:
-                locator = page.locator(f"{tag}[data-testid='{testid_variant}']")
-                if locator.count() > 0:
-                    locator.first.fill(value, timeout=5000)
-                    tag_type = "textarea" if tag == "textarea" else "input"
-                    return f"Filled {tag_type} '{testid_variant}' with '{value[:50]}'"
-            except Exception:
-                continue
-
-    # Second try: iterate all inputs/textareas with multi-criteria matching
-    for inp in page.locator(
-        "input:not([type=hidden]):not([type=submit]):not([type=button]), textarea"
-    ).all()[:70]:
-        try:
-            inp_name = inp.get_attribute("name") or ""
-            inp_placeholder = inp.get_attribute("placeholder") or ""
-            inp_id = inp.get_attribute("id") or ""
-            inp_aria_label = inp.get_attribute("aria-label") or ""
-            inp_testid = inp.get_attribute("data-testid") or ""
-
-            # Get label text
-            inp_label = ""
-            inp_id_attr = inp.get_attribute("id")
-            if inp_id_attr:
-                label_el = page.locator(f"label[for='{inp_id_attr}']")
-                if label_el.count() > 0:
-                    inp_label = label_el.first.inner_text(timeout=500).strip()
-
-            field_lower = field.lower()
-            if (
-                field_lower in inp_name.lower()
-                or field_lower in inp_placeholder.lower()
-                or field_lower in inp_id.lower()
-                or field_lower in inp_aria_label.lower()
-                or field_lower in inp_label.lower()
-                or (inp_testid and field_lower in inp_testid.lower())
-            ):
-                inp.fill(value, timeout=5000)
-                tag = "textarea" if inp.evaluate("el => el.tagName.toLowerCase()") == "textarea" else "input"
-                return f"Filled {tag} '{display}' with '{value[:50]}'"
-        except Exception:
-            continue
-
-    return f"Could not fill field matching: {field[:100]}"
-
+    return selector.click_select_option(page, select_name, option)[1]
 
 def execute_navigate(page: Page, action: dict[str, str]) -> str:
     """Navigate to a URL.
