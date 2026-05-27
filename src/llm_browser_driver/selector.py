@@ -239,6 +239,10 @@ def find_field(page: Page, field_text: str) -> tuple[bool, str]:
 
     for inp in inputs.all()[:50]:
         try:
+            # Skip disabled inputs — they can't be filled
+            if inp.is_disabled():
+                continue
+                
             inp_name = inp.get_attribute("name") or ""
             inp_placeholder = inp.get_attribute("placeholder") or ""
             inp_id = inp.get_attribute("id") or ""
@@ -324,6 +328,8 @@ def find_field(page: Page, field_text: str) -> tuple[bool, str]:
     # These are <button type='button'> with chevron icons, used as dropdown triggers
     # for dropdowns like "Country *", "State / Province", "City *"
     dropdown_buttons = page.locator("button[type='button']")
+    # First pass: find all dropdown buttons with their identifiers
+    all_dropdowns = []
     for btn in dropdown_buttons.all()[:50]:
         try:
             btn_text = btn.inner_text(timeout=500).strip()
@@ -339,22 +345,43 @@ def find_field(page: Page, field_text: str) -> tuple[bool, str]:
                 and "px-4" in btn_classes
                 and "py-2" in btn_classes
             )
-            if not (has_chevron or has_dropdown_style):
-                continue
-
-            field_lower = field_text.lower()
-
-            # Check if the field text matches the button text, aria-label, or testid
-            if (
-                field_lower in btn_text.lower()
-                or btn_text.lower() in field_lower
-                or (btn_aria_label and field_lower in btn_aria_label.lower())
-                or (btn_testid and field_lower in btn_testid.lower())
-            ):
-                display = btn_text or btn_aria_label or btn_testid
-                return True, display
+            if has_chevron or has_dropdown_style:
+                all_dropdowns.append({
+                    "btn": btn,
+                    "text": btn_text,
+                    "aria_label": btn_aria_label,
+                    "testid": btn_testid,
+                })
         except Exception:
             continue
+
+    if all_dropdowns:
+        # Word-level matching: split field_text into words, check if ANY word matches
+        field_words = [t for t in field_text.lower().split() if len(t) > 1 and t not in {"/", "-"}]
+        
+        for dd in all_dropdowns:
+            btn_text = dd["text"]
+            btn_aria_label = dd["aria_label"]
+            btn_testid = dd["testid"]
+
+            if field_words:
+                # Check if ANY field word appears in text, aria-label, or testid
+                if any(
+                    w in btn_text.lower() or w in btn_aria_label.lower() or w in btn_testid.lower()
+                    for w in field_words
+                ):
+                    display = btn_text or btn_aria_label or btn_testid
+                    return True, display
+            else:
+                # No meaningful words — fall back to substring match
+                if (
+                    field_text.lower() in btn_text.lower()
+                    or btn_text.lower() in field_text.lower()
+                    or (btn_aria_label and field_text.lower() in btn_aria_label.lower())
+                    or (btn_testid and field_text.lower() in btn_testid.lower())
+                ):
+                    display = btn_text or btn_aria_label or btn_testid
+                    return True, display
 
     return False, ""
 
