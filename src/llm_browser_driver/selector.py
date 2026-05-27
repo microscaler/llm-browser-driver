@@ -226,7 +226,7 @@ def find_field(page: Page, field_text: str) -> tuple[bool, str]:
 
     # Strategy 3: Try inputs first — prefer EXACT matches over substring matches
     # Only match placeholder if the search term is specific (not generic words)
-    generic_words = {"select", "required", "optional", "e.g.", "eg", "enter", "type"}
+    generic_words = {"select", "required", "optional", "e.g.", "e.g.,", "eg", "eg:", "enter", "type"}
     input_terms = [t for t in field_text.lower().split() if t not in generic_words]
     
     # If no specific terms remain after filtering, skip placeholder matching for this input
