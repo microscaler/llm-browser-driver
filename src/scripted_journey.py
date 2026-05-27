@@ -181,16 +181,57 @@ def run_journey():
             print(f"     {msg} → {'✓' if success else '✗'}")
             results.append({"step": "job_title", "status": "ok" if success else "fail", "details": msg})
             
-            print("\n[7/9] Step 1: Filling weight/dimensions...")
+            print("\n[7/9] Step 1: Filling weight...")
             success1, msg1 = fill_field(page, "18000", "15000")
             print(f"     Weight: {msg1} → {'✓' if success1 else '✗'}")
-            success2, msg2 = fill_field(page, "67.2", "12")
-            print(f"     Length: {msg2} → {'✓' if success2 else '✗'}")
-            results.append({"step": "dimensions", "status": "ok" if success1 and success2 else "fail", 
-                           "details": f"{msg1}, {msg2}"})
+            
+            print("\n[8/9] Step 1: Filling volume...")
+            success2, msg2 = fill_field(page, "67.2", "50")
+            print(f"     Volume: {msg2} → {'✓' if success2 else '✗'}")
+            
+            print("\n[9/9] Step 1: Filling number of packages...")
+            success3, msg3 = fill_field(page, "input-packages", "48")
+            print(f"     Packages: {msg3} → {'✓' if success3 else '✗'}")
+            
+            print("\n[10/9] Step 1: Filling cargo value...")
+            success4, msg4 = fill_field(page, "input-cargo-value", "45000")
+            print(f"     Cargo Value: {msg4} → {'✓' if success4 else '✗'}")
+            
+            print("\n[11/9] Step 1: Selecting insurance...")
+            page.wait_for_timeout(500)
+            success5, msg5 = select_dropdown(page, "Select option", "Yes - Full Coverage")
+            print(f"     Insurance: {msg5} → {'✓' if success5 else '✗'}")
+            
+            all_step1_pass = all([success1, success2, success3, success4, success5])
+            results.append({"step": "step1_completion", "status": "ok" if all_step1_pass else "fail", 
+                           "details": f"Weight:{msg1[:40]} Volume:{msg2[:40]} Pkg:{msg3[:40]} Val:{msg4[:40]} Ins:{msg5[:40]}"})
             
             # Check if Next Step is enabled
-            print("\n[8/9] Checking if Next Step is enabled...")
+            print("\n[12/11] Checking form state before clicking Next Step...")
+            page.wait_for_timeout(1000)
+            
+            # Dump all form field values from SolidJS
+            form_state = page.evaluate("""
+            () => {
+                const fields = {};
+                // Check all inputs/textareas by data-testid
+                document.querySelectorAll('[data-testid]').forEach(el => {
+                    fields[el.getAttribute('data-testid')] = {
+                        type: el.type || el.tagName.toLowerCase(),
+                        value: el.value || '',
+                    };
+                });
+                // Check select dropdowns (custom SolidJS ones)
+                document.querySelectorAll('[data-testid*="dropdown"]').forEach(el => {
+                    fields[el.getAttribute('data-testid')] = el.innerHTML;
+                });
+                // Check if validation error banner exists
+                const banner = document.getElementById('validation-error-banner');
+                fields['validationBanner'] = banner ? banner.textContent : null;
+                return fields;
+            }
+            """)
+            print(f"     Form state: {json.dumps(form_state, indent=4, default=str)[:500]}")
             page.wait_for_timeout(1000)
             info = get_page_info(page)
             next_step_enabled = "Next Step" in info["buttons"]
