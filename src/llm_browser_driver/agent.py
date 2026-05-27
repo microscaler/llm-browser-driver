@@ -402,11 +402,13 @@ class BrowserDriver:
                 # If fields are filled AND dropdowns selected AND navigation button exists but not attempted,
                 # add an explicit instruction
                 navigation_hint = ""
+                auto_click_nav = False
                 if (fill_count >= 3 and 
                     len(dropdown_actions) >= 3 and 
                     nav_buttons and 
                     not nav_attempted):
                     navigation_hint = f"\n**NAVIGATION SUGGESTION**: All form fields appear to be filled. The following navigation buttons are visible and enabled: {', '.join(b['text'] for b in nav_buttons)}. Click one to proceed to the next step.\n"
+                    auto_click_nav = True
 
                 user_prompt = f"""TASK: {goal}
 
@@ -422,6 +424,14 @@ Based on the goal, action history, and current page state, decide the next actio
                 # LLM decides next action
                 llm_response = self.llm.chat(system_prompt, user_prompt)
                 action = parse_action_from_response(llm_response)
+                
+                # HARD CODED FALLBACK: If heuristic says to auto-click nav but LLM
+                # didn't do it anyway (common with qwen3), force click the nav button
+                if auto_click_nav and action.get('action') != 'click':
+                    # LLM ignored the navigation hint - force it
+                    nav_btn_text = nav_buttons[0]['text']
+                    action = {"action": "click", "element": nav_btn_text}
+                    action['auto_forced'] = True  # flag for logging
 
                 # Execute action
                 result_msg, is_done = execute_action(page, action)
