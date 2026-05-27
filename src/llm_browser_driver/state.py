@@ -490,6 +490,9 @@ def build_page_summary(snapshot: dict[str, Any]) -> str:
     sections = []
     sections.append(f"PAGE: {snapshot['title']}")
     sections.append(f"URL: {snapshot['url']}")
+    current_step = snapshot.get("current_step", "")
+    if current_step:
+        sections.append(f"CURRENT STEP: {current_step}")
     sections.append(f"Viewport: {json.dumps(snapshot.get('viewport', {}))}")
     sections.append(f"\n--- ELEMENT COUNTS ---")
     sections.append(
@@ -628,6 +631,60 @@ def build_action_history_summary(action_history: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def detect_current_step(page: Page) -> str:
+    """Detect which wizard step the LLM is currently on.
+
+    Searches for step headers like 'Step 1: Shipment Details',
+    navigation banners, or other step-indicating elements.
+
+    Args:
+        page: Playwright Page object.
+
+    Returns:
+        Step description string, e.g., 'Step 2: Pickup Location'
+        or '' if no step context found.
+    """
+    step_patterns = [
+        # SolidJS header format: "Step 1: Shipment Details"
+        "h3:has-text('Step')",
+        "h2:has-text('Step')",
+        "h1:has-text('Step')",
+        "[data-testid*='step-header']",
+        "[data-testid*='step-title']",
+        "[data-testid='current-step']",
+    ]
+
+    for pattern in step_patterns:
+        try:
+            elements = page.locator(pattern)
+            if elements.count() > 0:
+                text = elements.first.inner_text(timeout=500).strip()
+                # Clean up whitespace and truncation
+                text = " ".join(text.split())
+                if text:
+                    return text
+        except Exception:
+            continue
+
+    # Fallback: check for step indicator in body text
+    try:
+        body_text = page.locator("body").inner_text(timeout=1000)
+        lines = body_text.split("\n")
+        for line in lines:
+            line = line.strip()
+            if line.startswith("Step ") and "Step " not in line[:10]:
+                # Found a step indicator line
+                words = line.split()
+                if len(words) >= 2 and words[0] == "Step":
+                    step_num = words[0]
+                    step_desc = " ".join(words[1:20])  # Up to 20 words
+                    return step_desc
+    except Exception:
+        pass
+
+    return ""
+
+
 def get_page_state(page: Page) -> dict[str, Any]:
     """Capture comprehensive page state.
 
@@ -639,10 +696,11 @@ def get_page_state(page: Page) -> dict[str, Any]:
 
     Returns:
         Page state dict with title, url, viewport, forms, details, html_snippet,
-        accessibility_tree, and console messages.
+        accessibility_tree, console messages, and current_step.
     """
     title = page.title()
     url = page.url
+    current_step = detect_current_step(page)
 
     inputs = page.locator("input:not([type=hidden]):not([type=submit]):not([type=button])")
     textareas = page.locator("textarea")
@@ -688,6 +746,7 @@ def get_page_state(page: Page) -> dict[str, Any]:
     return {
         "title": title,
         "url": url,
+        "current_step": current_step,
         "viewport": viewport,
         "forms": forms,
         "details": details,
