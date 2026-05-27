@@ -378,6 +378,36 @@ class BrowserDriver:
                 page_summary = build_page_summary(snapshot)
                 history_summary = build_action_history_summary(action_history)
 
+                # Heuristic: detect if all form fields are filled and suggest clicking "Next Step"
+                # This addresses the case where the LLM fills all fields but doesn't know to navigate
+                fill_actions = [r for r in action_history if r.get('action') == 'fill']
+                fill_count = len(fill_actions)
+                
+                # Check if any navigation button exists and is enabled
+                nav_buttons = [
+                    btn for btn in snapshot.get('details', {}).get('buttons', [])
+                    if btn.get('text', '') in ('Next Step', 'Next', 'Continue', 'Submit', 'Save', 'Review', 'Confirm')
+                    and not btn.get('disabled', False)
+                ]
+                
+                # Check if navigation has already been attempted
+                nav_attempted = any(
+                    r.get('action') == 'click' and 'Next' in str(r.get('result', ''))
+                    for r in action_history
+                )
+                
+                # Check if any dropdown was selected
+                dropdown_actions = [r for r in action_history if r.get('action') in ('select_custom', 'select')]
+                
+                # If fields are filled AND dropdowns selected AND navigation button exists but not attempted,
+                # add an explicit instruction
+                navigation_hint = ""
+                if (fill_count >= 3 and 
+                    len(dropdown_actions) >= 3 and 
+                    nav_buttons and 
+                    not nav_attempted):
+                    navigation_hint = f"\n**NAVIGATION SUGGESTION**: All form fields appear to be filled. The following navigation buttons are visible and enabled: {', '.join(b['text'] for b in nav_buttons)}. Click one to proceed to the next step.\n"
+
                 user_prompt = f"""TASK: {goal}
 
 {history_summary}
