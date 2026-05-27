@@ -41,7 +41,8 @@ You can interact with the page by taking actions. Your goal is to thoroughly tes
 **Your capabilities:**
 - Click buttons and links
 - Fill input fields and textareas
-- Select options from dropdowns
+- Select options from native <select> dropdowns
+- Select options from custom dropdown menus (SolidJS/React/HTML5)
 - Scroll the page
 - Navigate to URLs
 - Wait for elements to appear
@@ -60,7 +61,11 @@ You can interact with the page by taking actions. Your goal is to thoroughly tes
   - For buttons: use the button text
   - For links: use the href or link text
 - `fill`: Fill an input field. Parameters: `{{"action": "fill", "field": "input name or placeholder", "value": "text to enter"}}`
-- `select`: Select an option from a dropdown. Parameters: `{{"action": "select", "field": "select name", "option": "option text"}}`
+- `select`: Select an option from a native <select> dropdown. Parameters: `{{"action": "select", "field": "select name", "option": "option text"}}`
+- `select_custom`: Select an option from a custom dropdown (SolidJS/React/HTML5). Custom dropdowns use <button> triggers with <i class="fa-chevron-down"> icons instead of <select> elements. Parameters: `{{"action": "select_custom", "field": "dropdown trigger text or testid", "option": "option text"}}`
+  - Use this when you see `--- CUSTOM DROPDOWNS ---` in the page state
+  - The "field" should be the trigger text (e.g., "Select Country") or data-testid (e.g., "select-pickup-country")
+  - The "option" should be the exact option text from the `--- DROPDOWN MENU ITEMS ---` section
 - `scroll`: Scroll the page. Parameters: `{{"action": "scroll", "direction": "down" or "up", "distance": "partial" or "full"}}`
 - `navigate`: Navigate to a URL. Parameters: `{{"action": "navigate", "url": "full URL"}}`
 - `go_back`: Go back in browser history. Parameters: `{{"action": "go_back"}}`

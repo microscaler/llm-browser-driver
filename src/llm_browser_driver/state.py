@@ -364,6 +364,83 @@ def extract_accessibility_tree(page: Page) -> dict[str, Any]:
         return {"error": str(e)}
 
 
+def extract_custom_dropdowns(page: Page) -> list[dict[str, Any]]:
+    """Extract custom dropdown triggers (SolidJS/React SelectDropdown components).
+
+    Custom dropdowns use <button type='button'> with a chevron icon (<i class='fa-chevron-down'>)
+    instead of native <select> elements. Options are conditionally rendered via
+    <Show when={isOpen()}> blocks, so they only exist in the DOM when the dropdown is open.
+
+    This function identifies dropdown triggers and returns their metadata so the LLM
+    knows they exist and can be interacted with.
+
+    Args:
+        page: Playwright Page object.
+
+    Returns:
+        List of dropdown trigger dicts with type, text, disabled, testid, and value.
+    """
+    dropdowns = []
+    locator = page.locator("button[type='button']")
+    for i, el in enumerate(locator.all()[:50]):
+        try:
+            text = ""
+            try:
+                text = el.inner_text(timeout=500).strip()
+            except Exception:
+                pass
+            classes = el.get_attribute("class") or ""
+            has_chevron = "fa-chevron-down" in classes
+            # Also detect dropdown styling patterns (rounded-lg + border + padding)
+            is_dropdown_style = (
+                "rounded-lg" in classes and
+                "border" in classes and
+                ("px-4" in classes or "py-2" in classes)
+            )
+            # Accept if it has a chevron, or has dropdown styling + non-empty text
+            if has_chevron or (is_dropdown_style and text and len(text) > 2):
+                info = {
+                    "index": i,
+                    "type": "dropdown_trigger",
+                    "text": text,
+                    "disabled": el.is_disabled(),
+                    "data-testid": el.get_attribute("data-testid") or "",
+                    "value": text if text else "",
+                }
+                dropdowns.append(info)
+        except Exception:
+            pass
+    return dropdowns
+
+
+def extract_dropdown_menu_items(page: Page) -> list[dict[str, Any]]:
+    """Extract currently visible dropdown menu items.
+
+    Custom dropdown options are conditionally rendered inside <ul><li> blocks.
+    This only captures items that are currently visible (dropdown is open).
+    The LLM uses this to decide which option to select after clicking a trigger.
+
+    Args:
+        page: Playwright Page object.
+
+    Returns:
+        List of option dicts with text and data-testid.
+    """
+    options = []
+    # Custom dropdown items: <ul><li class="cursor-pointer">...
+    for el in page.locator("ul li.cursor-pointer").all()[:100]:
+        try:
+            text = el.inner_text(timeout=500).strip()
+            if text and len(text) > 0:
+                options.append({
+                    "text": text,
+                    "data-testid": el.get_attribute("data-testid") or "",
+                })
+        except Exception:
+            pass
+    return options
+
+
 def extract_console_messages(page: Page) -> list[dict[str, str]]:
     """Capture console errors and warnings during page load.
 
@@ -431,6 +508,7 @@ def build_page_summary(snapshot: dict[str, Any]) -> str:
         f"Form fields with labels: {len(details.get('form_fields', []))}"
     )
     sections.append(f"Selects: {len(details.get('selects', []))}")
+    sections.append(f"Custom dropdowns: {len(details.get('custom_dropdowns', []))}")
 
     # Inputs detail
     if details.get("inputs"):
@@ -470,6 +548,22 @@ def build_page_summary(snapshot: dict[str, Any]) -> str:
                     f"    option: {opt['text']} "
                     f"(value={opt['value']}, selected={opt['selected']})"
                 )
+
+    # Custom dropdown triggers
+    if details.get("custom_dropdowns"):
+        sections.append(f"\n--- CUSTOM DROPDOWNS ---")
+        for dd in details["custom_dropdowns"][:10]:
+            sections.append(
+                f"  text='{dd['text']}', disabled={dd['disabled']}, "
+                f"test_id='{dd.get('data-testid', '')}'"
+            )
+
+    # Open dropdown menu items
+    if details.get("dropdown_menu_items"):
+        sections.append(f"\n--- DROPDOWN MENU ITEMS ({len(details['dropdown_menu_items'])}) ---")
+        for item in details["dropdown_menu_items"][:30]:
+            testid = item.get("data-testid", "")
+            sections.append(f"  text='{item['text']}', test_id='{testid}'")
 
     # Form field labels
     if details.get("form_fields"):
@@ -575,6 +669,8 @@ def get_page_state(page: Page) -> dict[str, Any]:
         "links": extract_links(page),
         "images": extract_visible_text(page.locator("img")),
         "selects": extract_selects(page),
+        "custom_dropdowns": extract_custom_dropdowns(page),
+        "dropdown_menu_items": extract_dropdown_menu_items(page),
         "form_fields": extract_form_fields(page),
         "disabled_elements": extract_disabled_elements(page),
     }

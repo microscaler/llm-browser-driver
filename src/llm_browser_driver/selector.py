@@ -251,7 +251,93 @@ def find_select_field(page: Page, field_text: str) -> tuple[bool, str]:
                 return True, sel_name
         except Exception:
             continue
+    return False, f"Could not find select field matching: {select_name}"
+
+
+def find_custom_dropdown_trigger(page: Page, field_text: str) -> tuple[bool, str]:
+    """Find a custom dropdown trigger button by matching its displayed text.
+
+    Custom dropdowns use <button type='button'> with chevron styling instead of
+    native <select> elements. The button's visible text is the currently selected
+    value or placeholder (e.g., "Select Country", "Select State / Province").
+
+    Selection strategy:
+    1. data-testid match (highest priority)
+    2. Button text contains field_text
+    3. Button text is field_text
+
+    Args:
+        page: Playwright Page object.
+        field_text: The field text from the LLM (e.g., "Select Country", "pickup country").
+
+    Returns:
+        (success, display_text) tuple.
+    """
+    # Strategy 1: Match by data-testid (most reliable)
+    # Look for patterns like select-pickup-country, pickup-country, etc.
+    testid_patterns = [
+        f"[data-testid*='{field_text.lower().replace(' ', '-')}']",
+        f"[data-testid*='{field_text.lower().replace(' ', '')}']",
+    ]
+    for pattern in testid_patterns:
+        try:
+            locator = page.locator(f"button[type='button']{pattern}")
+            if locator.count() > 0:
+                text = locator.first.inner_text(timeout=500).strip()
+                return True, text
+        except Exception:
+            continue
+
+    # Strategy 2: Search all custom dropdown triggers by text
+    for el in page.locator("button[type='button']").all()[:50]:
+        try:
+            text = el.inner_text(timeout=500).strip()
+            classes = el.get_attribute("class") or ""
+            # Must be a dropdown trigger: either has fa-chevron-down on button class,
+            # or has a child <i> with fa-chevron-down (SelectDropdown component pattern
+            # renders the chevron as <span><i class="fas fa-chevron-down"></i></span>
+            # inside the button, not on the button's own class attribute)
+            has_chevron = (
+                "fa-chevron-down" in classes
+                # SelectDropdown renders <i class="fa-solid fa-chevron-down ..."> inside button
+                or el.locator("i.fa.fa-chevron-down").count() > 0
+                or el.locator("i.fa-solid.fa-chevron-down").count() > 0
+                # Also handle FontAwesome 5+ syntax: i class="fas fa-chevron-down"
+                or el.locator("i.fas.fa-chevron-down").count() > 0
+            )
+            if not has_chevron:
+                continue
+            # Case-insensitive text match
+            if field_text.lower() in text.lower() or text.lower() in field_text.lower():
+                return True, text
+        except Exception:
+            continue
+
     return False, ""
+
+
+def click_custom_dropdown_option(page: Page, option_text: str) -> tuple[bool, str]:
+    """Click a visible option in an open custom dropdown menu.
+
+    Custom dropdowns render options as <ul><li class="cursor-pointer"> when open.
+    This finds and clicks the matching option by text.
+
+    Args:
+        page: Playwright Page object.
+        option_text: The text of the option to select.
+
+    Returns:
+        (success, result_message) tuple.
+    """
+    for el in page.locator("ul li.cursor-pointer").all()[:100]:
+        try:
+            text = el.inner_text(timeout=500).strip()
+            if option_text.lower() in text.lower() or text.lower() in option_text.lower():
+                el.click(timeout=5000)
+                return True, f"Selected option '{text}'"
+        except Exception:
+            continue
+    return False, f"Option '{option_text}' not found in open dropdown menu"
 
 
 def click_select_option(

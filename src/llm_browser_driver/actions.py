@@ -268,6 +268,78 @@ def execute_go_back(page: Page, action: dict[str, str]) -> str:
     return "Went back"
 
 
+def execute_select_custom_dropdown(page: Page, action: dict[str, str]) -> str:
+    """Execute a custom dropdown selection (two-step: open + select).
+
+    Custom dropdowns (SolidJS/React SelectDropdown) use <button> triggers with
+    <Show when={isOpen()}> option rendering. This handler:
+    1. Finds and clicks the dropdown trigger button to open the menu
+    2. Waits for options to appear
+    3. Finds and clicks the matching option by text
+
+    This is a single action that encapsulates the full two-step interaction.
+
+    Args:
+        page: Playwright Page object.
+        action: Action dict with "field" and "option" keys.
+            - "field": The dropdown trigger text or testid (e.g., "Select Country")
+            - "option": The option text to select (e.g., "South Africa")
+
+    Returns:
+        Result message string.
+    """
+    field = action.get("field", "")
+    option = action.get("option", "")
+
+    # Step 1: Find the dropdown trigger
+    found, display = selector.find_custom_dropdown_trigger(page, field)
+    if not found:
+        return f"Could not find dropdown field matching: {field[:100]}"
+
+    # Step 2: Click the trigger to open the dropdown menu
+    try:
+        # Try data-testid match first
+        testid_pattern = f"[data-testid*='{field.lower().replace(' ', '-')}']"
+        trigger = page.locator(f"button[type='button']{testid_pattern}")
+        if trigger.count() == 0:
+            # Fallback: text match
+            for el in page.locator("button[type='button']").all()[:50]:
+                text = el.inner_text(timeout=500).strip()
+                if field.lower() in text.lower():
+                    trigger = el
+                    break
+        else:
+            trigger = trigger.first
+        trigger.click(timeout=5000)
+    except Exception:
+        return f"Failed to open dropdown for: {field[:100]}"
+
+    # Step 3: Wait for options to appear (SolidJS reactivity)
+    try:
+        page.wait_for_selector("ul li.cursor-pointer", timeout=5000)
+    except Exception:
+        return f"Dropdown opened but no options appeared for: {field[:100]}"
+
+    # Step 4: Click the matching option
+    success, msg = selector.click_custom_dropdown_option(page, option)
+    if not success:
+        # Collect available options to help diagnose
+        available = []
+        for el in page.locator("ul li.cursor-pointer").all()[:20]:
+            try:
+                t = el.inner_text(timeout=500).strip()
+                if t:
+                    available.append(t)
+            except Exception:
+                pass
+        return (
+            f"Option '{option}' not found in dropdown. "
+            f"Available options: {', '.join(available[:10])}"
+        )
+
+    return msg
+
+
 # ---------------------------------------------------------------------------
 # Public action dispatcher
 # ---------------------------------------------------------------------------
@@ -277,6 +349,7 @@ ACTION_HANDLERS = {
     "click": execute_click,
     "fill": execute_fill,
     "select": execute_select,
+    "select_custom": execute_select_custom_dropdown,
     "navigate": execute_navigate,
     "scroll": execute_scroll,
     "wait": execute_wait,
