@@ -403,12 +403,20 @@ class BrowserDriver:
                 # add an explicit instruction
                 navigation_hint = ""
                 auto_click_nav = False
-                if (fill_count >= 3 and 
-                    len(dropdown_actions) >= 3 and 
-                    nav_buttons and 
-                    not nav_attempted):
-                    navigation_hint = f"\n**NAVIGATION SUGGESTION**: All form fields appear to be filled. The following navigation buttons are visible and enabled: {', '.join(b['text'] for b in nav_buttons)}. Click one to proceed to the next step.\n"
+                # More permissive: any form interaction (fill OR dropdown) + nav button exists
+                form_interacted = fill_count >= 1 or len(dropdown_actions) >= 1
+                if form_interacted and nav_buttons and not nav_attempted:
+                    btn_text = ", ".join(b["text"] for b in nav_buttons)
+                    navigation_hint = (
+                        "\n**NAVIGATION SUGGESTION**: Form fields have been filled and dropdowns selected. "
+                        "Nav buttons available: " + btn_text + ". Click one to proceed to the next step.\n"
+                    )
                     auto_click_nav = True
+                    print(
+                        f"[ITER {iteration}] NAV HINT TRIGGERED: "
+                        f"fill={fill_count}, dropdowns={len(dropdown_actions)}, nav={btn_text}",
+                        flush=True,
+                    )
 
                 user_prompt = f"""TASK: {goal}
 
