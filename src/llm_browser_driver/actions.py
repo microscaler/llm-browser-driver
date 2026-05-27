@@ -269,15 +269,16 @@ def execute_go_back(page: Page, action: dict[str, str]) -> str:
 
 
 def execute_select_custom_dropdown(page: Page, action: dict[str, str]) -> str:
-    """Execute a custom dropdown selection (two-step: open + select).
+    """Execute a custom dropdown selection (open if needed + select).
 
     Custom dropdowns (SolidJS/React SelectDropdown) use <button> triggers with
     <Show when={isOpen()}> option rendering. This handler:
-    1. Finds and clicks the dropdown trigger button to open the menu
-    2. Waits for options to appear
-    3. Finds and clicks the matching option by text
+    1. Checks if options are already visible (dropdown already open)
+    2. If not, clicks the trigger to open the menu
+    3. Waits for options to appear (with retries for SolidJS reactivity)
+    4. Finds and clicks the matching option by text
 
-    This is a single action that encapsulates the full two-step interaction.
+    This is a single action that encapsulates the full interaction.
 
     Args:
         page: Playwright Page object.
@@ -296,31 +297,52 @@ def execute_select_custom_dropdown(page: Page, action: dict[str, str]) -> str:
     if not found:
         return f"Could not find dropdown field matching: {field[:100]}"
 
-    # Step 2: Click the trigger to open the dropdown menu
-    try:
-        # Try data-testid match first
-        testid_pattern = f"[data-testid*='{field.lower().replace(' ', '-')}']"
-        trigger = page.locator(f"button[type='button']{testid_pattern}")
-        if trigger.count() == 0:
-            # Fallback: text match
-            for el in page.locator("button[type='button']").all()[:50]:
-                text = el.inner_text(timeout=500).strip()
-                if field.lower() in text.lower():
-                    trigger = el
-                    break
-        else:
-            trigger = trigger.first
-        trigger.click(timeout=5000)
-    except Exception:
-        return f"Failed to open dropdown for: {field[:100]}"
+    # Step 2: Check if dropdown is already open (options visible in DOM)
+    # Also check via JS in case SolidJS <Show> rendered but Playwright
+    # locator hasn't picked it up yet
+    options_visible = page.evaluate("""
+        () => document.querySelectorAll('ul li.cursor-pointer').length > 0
+    """)
 
-    # Step 3: Wait for options to appear (SolidJS reactivity)
-    try:
-        page.wait_for_selector("ul li.cursor-pointer", timeout=5000)
-    except Exception:
-        return f"Dropdown opened but no options appeared for: {field[:100]}"
+    if not options_visible:
+        # Step 2a: Dropdown is closed — open it
+        try:
+            # Try data-testid match first
+            testid_pattern = f"[data-testid*='{field.lower().replace(' ', '-')}']"
+            trigger = page.locator(f"button[type='button']{testid_pattern}")
+            if trigger.count() == 0:
+                # Fallback: text match
+                for el in page.locator("button[type='button']").all()[:50]:
+                    text = el.inner_text(timeout=500).strip()
+                    if field.lower() in text.lower():
+                        trigger = el
+                        break
+            else:
+                trigger = trigger.first
+            trigger.click(timeout=5000)
+        except Exception:
+            return f"Failed to open dropdown for: {field[:100]}"
 
-    # Step 4: Click the matching option
+        # Step 2b: Wait for options to appear with retries for SolidJS reactivity
+        # SolidJS <Show> can take 100-500ms to render
+        max_retries = 3
+        for retry in range(max_retries):
+            page.wait_for_timeout(500)
+            options_visible = page.evaluate("""
+                () => document.querySelectorAll('ul li.cursor-pointer').length > 0
+            """)
+            if options_visible:
+                break
+            if retry < max_retries - 1:
+                return (
+                    f"Dropdown opened but options not yet rendered "
+                    f"(retry {retry+1}/{max_retries})"
+                )
+        if not options_visible:
+            return f"Dropdown opened but no options appeared for: {field[:100]}"
+    # else: dropdown is already open, skip to selection
+
+    # Step 3: Click the matching option
     success, msg = selector.click_custom_dropdown_option(page, option)
     if not success:
         # Collect available options to help diagnose
