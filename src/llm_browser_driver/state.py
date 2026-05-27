@@ -542,10 +542,12 @@ def build_page_summary(snapshot: dict[str, Any]) -> str:
     if details.get("buttons"):
         sections.append(f"\n--- BUTTONS ---")
         for btn in details["buttons"][:20]:
+            testid = btn.get('data-testid', '')
             sections.append(
                 f"  text='{btn['text']}', "
                 f"aria-label={btn['aria_label']}, "
                 f"disabled={btn['disabled']}"
+                + (f", test_id='{testid}'" if testid else "")
             )
 
     # Links detail
@@ -558,8 +560,10 @@ def build_page_summary(snapshot: dict[str, Any]) -> str:
     if details.get("selects"):
         sections.append(f"\n--- SELECTS ---")
         for sel in details["selects"][:10]:
+            testid = sel.get('data-testid', '')
             sections.append(
                 f"  name={sel['name']}, disabled={sel['disabled']}"
+                + (f", test_id='{testid}'" if testid else "")
             )
             for opt in sel.get("options", [])[:5]:
                 sections.append(

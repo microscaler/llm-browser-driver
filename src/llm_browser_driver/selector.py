@@ -294,6 +294,42 @@ def find_field(page: Page, field_text: str) -> tuple[bool, str]:
         except Exception:
             continue
 
+    # Strategy 5: Try custom dropdown buttons (SolidJS CountrySelect, ProvinceAutocomplete, etc.)
+    # These are <button type='button'> with chevron icons, used as dropdown triggers
+    # for dropdowns like "Country *", "State / Province", "City *"
+    dropdown_buttons = page.locator("button[type='button']")
+    for btn in dropdown_buttons.all()[:50]:
+        try:
+            btn_text = btn.inner_text(timeout=500).strip()
+            btn_aria_label = btn.get_attribute("aria-label") or ""
+            btn_testid = btn.get_attribute("data-testid") or ""
+            btn_classes = btn.get_attribute("class") or ""
+
+            # Only consider it a dropdown if it has chevron or dropdown styling
+            has_chevron = "fa-chevron-down" in btn_classes or "fa-chevron-up" in btn_classes
+            has_dropdown_style = (
+                "rounded-lg" in btn_classes
+                and "border" in btn_classes
+                and "px-4" in btn_classes
+                and "py-2" in btn_classes
+            )
+            if not (has_chevron or has_dropdown_style):
+                continue
+
+            field_lower = field_text.lower()
+
+            # Check if the field text matches the button text, aria-label, or testid
+            if (
+                field_lower in btn_text.lower()
+                or btn_text.lower() in field_lower
+                or (btn_aria_label and field_lower in btn_aria_label.lower())
+                or (btn_testid and field_lower in btn_testid.lower())
+            ):
+                display = btn_text or btn_aria_label or btn_testid
+                return True, display
+        except Exception:
+            continue
+
     return False, ""
 
 
@@ -308,14 +344,16 @@ def find_select_field(page: Page, field_text: str) -> tuple[bool, str]:
         (success, select_name_or_empty) tuple.
     """
     selects = page.locator("select")
+    found_name = ""
     for sel in selects.all()[:20]:
         try:
             sel_name = sel.get_attribute("name") or ""
+            found_name = sel_name
             if field_text.lower() in sel_name.lower():
                 return True, sel_name
         except Exception:
             continue
-    return False, f"Could not find select field matching: {select_name}"
+    return False, f"Could not find select field matching: {field_text}"
 
 
 def find_custom_dropdown_trigger(page: Page, field_text: str) -> tuple[bool, str]:
